@@ -34,6 +34,30 @@ root.withdraw()
 root.title("NetPyWiz — Network Monitor")
 root.configure(bg=BG)
 
+# Set icon early so all Toplevels inherit it
+try:
+    from PIL import Image, ImageDraw, ImageTk
+
+    def _make_icon():
+        img  = Image.new("RGB", (64, 64), "#0a0a0f")
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([8, 14, 56, 50], outline="#ff00ff", width=2, fill="#1a1a2e")
+        for i in range(8):
+            x = 13 + i * 5
+            draw.rectangle([x, 20, x+3, 36], fill="#ffaa00")
+        draw.rectangle([20, 48, 44, 56], outline="#ff00ff", width=1, fill="#1a1a2e")
+        draw.rectangle([4,  4,  12, 12], fill="#00f5ff")
+        draw.rectangle([52, 4,  60, 12], fill="#00f5ff")
+        draw.rectangle([4,  52, 12, 60], fill="#00f5ff")
+        draw.rectangle([52, 52, 60, 60], fill="#00f5ff")
+        return img
+
+    _icon_img  = _make_icon()
+    _icon_photo = ImageTk.PhotoImage(_icon_img)
+    root.iconphoto(True, _icon_photo)  # True = apply to all future Toplevels too
+except Exception as e:
+    print(f"Could not set icon: {e}")
+
 # ── Startup flow ──────────────────────────────────────────────────────────────
 error_msg = ""
 while not devices:
@@ -676,6 +700,8 @@ status_bar = tk.Label(bottom,
 status_bar.pack(side="left", padx=16)
 
 def on_close():
+    if tray_icon["instance"]:
+        tray_icon["instance"].stop()
     if session_file["path"]:
         choice = ask_export_mode(root)
         if choice == "cancel":
@@ -696,9 +722,70 @@ tk.Button(bottom, text="⏹  END SESSION + EXPORT",
     activebackground=MAGENTA, activeforeground=BG, bd=0
 ).pack(side="right", padx=16, pady=8, ipadx=12)
 
-# Launch
+# ── Tray Icon ─────────────────────────────────────────────────────────────────
+tray_icon = {"instance": None}
+
+def make_tray_image():
+    from PIL import Image, ImageDraw
+    img  = Image.new("RGB", (64, 64), "#0a0a0f")
+    draw = ImageDraw.Draw(img)
+
+    # Ethernet port body
+    draw.rectangle([8, 14, 56, 50], outline="#ff00ff", width=2, fill="#1a1a2e")
+
+    # 8 gold contact pins
+    for i in range(8):
+        x = 13 + i * 5
+        draw.rectangle([x, 20, x+3, 36], fill="#ffaa00")
+
+    # Latch tab at bottom
+    draw.rectangle([20, 48, 44, 56], outline="#ff00ff", width=1, fill="#1a1a2e")
+
+    # Cyan corner accents
+    draw.rectangle([4,  4,  12, 12], fill="#00f5ff")
+    draw.rectangle([52, 4,  60, 12], fill="#00f5ff")
+    draw.rectangle([4,  52, 12, 60], fill="#00f5ff")
+    draw.rectangle([52, 52, 60, 60], fill="#00f5ff")
+
+    return img
+
+def setup_tray():
+    try:
+        import pystray
+
+        icon_img = make_tray_image()
+
+        def show_window(icon, item):
+            root.after(0, root.deiconify)
+            root.after(0, root.lift)
+
+        def exit_app(icon, item):
+            root.after(0, on_close)
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Show NetPyWiz", show_window, default=True),
+            pystray.MenuItem("Exit + Export", exit_app)
+        )
+
+        icon = pystray.Icon("NetPyWiz", icon_img, "NetPyWiz Monitor", menu)
+        tray_icon["instance"] = icon
+
+        def on_minimize(event):
+            if root.state() == "iconic":
+                root.withdraw()
+                icon.notify("NetPyWiz", "Still monitoring in the background.")
+
+        root.bind("<Unmap>", on_minimize)
+        threading.Thread(target=icon.run, daemon=True).start()
+
+    except Exception as e:
+        print(f"Tray icon unavailable: {e}")
+
+# ── Launch ─────────────────────────────────────────────────────────────────────
 threading.Thread(target=start_monitor, args=(devices,), daemon=True).start()
 root.after(1000, update_table)
 root.after(1000, refresh_info_bar)
+root.after(500, setup_tray)
 root.deiconify()
+
 root.mainloop()
