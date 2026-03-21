@@ -41,6 +41,7 @@ root = tk.Tk()
 root.withdraw()
 root.title("NetPyWiz — Network Monitor")
 root.configure(bg=BG)
+root.wm_iconname("NetPyWiz")
 
 # Set icon early — all Toplevels inherit
 try:
@@ -122,7 +123,11 @@ while not subnets:
                 all_devices.extend(scanned)
                 subnets.append(sn)
                 found_any = True
-                save_config({"last_subnet": sn})
+                save_config({
+                "last_subnet": sn,
+                "nvd_api_key": startup.get("api_key", "")
+            })
+        config["nvd_api_key"] = startup.get("api_key", "")
 
         if not found_any:
             error_msg = "No devices found on any subnet — check and try again"
