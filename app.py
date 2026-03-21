@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import ttk, simpledialog
 import threading
@@ -9,6 +10,8 @@ from nmap_scan import run_nmap
 from startup import (ask_subnets, run_splash_scan, ask_rescan,
                      ask_export_mode, best_font)
 from config import load as load_config, save as save_config
+from cve_lookup import lookup_cves, severity_color
+from report_generator import generate_device_report, save_device_report
 
 BG          = "#0a0a0f"
 BG2         = "#0f0f1a"
@@ -24,6 +27,7 @@ WHITE       = "#e0e0ff"
 YELLOW      = "#ffe94d"
 
 device_notes  = {}
+device_vulns  = {}  # { ip: { "nmap": {}, "cves_by_service": {} } }
 previous_macs = set()
 session_file  = {"path": None}
 config        = load_config()
@@ -667,29 +671,44 @@ def open_detail_popup(ip):
     port_frame.pack(fill="both", expand=True, padx=8, pady=4)
 
     def run_nmap_thread():
-        result = run_nmap(ip)
+        nmap_result = run_nmap(ip)
         if popup.winfo_exists():
-            root.after(0, lambda: populate_nmap(result))
+            root.after(0, lambda: populate_nmap(nmap_result))
 
-    def populate_nmap(result):
+    def populate_nmap(nmap_result):
         nmap_scanning["active"] = False
-        nmap_status_var.set("◈ SCAN COMPLETE")
-        nmap_status_lbl.config(fg=GREEN)
-        os_var.set(f"OS: {result['os_guess']}")
+        nmap_status_var.set("◈ PORTS SCANNED — LOOKING UP CVEs...")
+        nmap_status_lbl.config(fg=AMBER)
+        os_var.set(f"OS: {nmap_result['os_guess']}")
 
-        if not result["ports"]:
+        # Firewall detection
+        fw_keywords = ["firewall","fortinet","paloalto","pfsense",
+                       "checkpoint","sonicwall","cisco asa","juniper"]
+        fw_detected = any(k in nmap_result.get("os_guess","").lower()
+                         for k in fw_keywords)
+        fw_label = tk.Label(port_frame,
+            text=f"{'⚠ FIREWALL DETECTED' if fw_detected else '◈ NO FIREWALL DETECTED'}",
+            bg=BG3,
+            fg=RED if fw_detected else DIM,
+            font=best_font(8, True))
+        fw_label.pack(anchor="w", pady=(0,4))
+
+        if not nmap_result["ports"]:
             tk.Label(port_frame, text="NO OPEN PORTS FOUND",
                 bg=BG3, fg=DIM, font=best_font(8)).pack(pady=8)
+            nmap_status_var.set("◈ SCAN COMPLETE")
+            nmap_status_lbl.config(fg=GREEN)
             return
 
+        # Port headers
         hrow = tk.Frame(port_frame, bg=BG3)
         hrow.pack(fill="x")
-        for txt, w in [("PORT",7), ("PROTO",6), ("SERVICE",22)]:
+        for txt, w in [("PORT",7),("PROTO",6),("SERVICE",28)]:
             tk.Label(hrow, text=txt, width=w, bg=BG3, fg=CYAN,
                 font=best_font(8, True), anchor="w").pack(side="left")
-
         tk.Frame(port_frame, bg=MAGENTA_DIM, height=1).pack(fill="x", pady=2)
 
+        # Scrollable port + CVE list
         c  = tk.Canvas(port_frame, bg=BG3, highlightthickness=0)
         sb = ttk.Scrollbar(port_frame, orient="vertical", command=c.yview)
         inner = tk.Frame(c, bg=BG3)
@@ -700,15 +719,106 @@ def open_detail_popup(ip):
         c.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
 
-        for p in result["ports"]:
+        for p in nmap_result["ports"]:
             pr = tk.Frame(inner, bg=BG3)
             pr.pack(fill="x", pady=1)
             tk.Label(pr, text=p["port"],     width=7,  bg=BG3, fg=GREEN,
                 font=best_font(8), anchor="w").pack(side="left")
             tk.Label(pr, text=p["protocol"], width=6,  bg=BG3, fg=DIM,
                 font=best_font(8), anchor="w").pack(side="left")
-            tk.Label(pr, text=p["service"],  width=22, bg=BG3, fg=WHITE,
+            tk.Label(pr, text=p["service"],  width=28, bg=BG3, fg=WHITE,
                 font=best_font(8), anchor="w").pack(side="left")
+
+        # CVE lookup in background
+        def cve_thread():
+            cves_by_service = {}
+            services = list({p["service"] for p in nmap_result["ports"]
+                            if p["service"] not in ("unknown","")})
+            for svc in services:
+                cves = lookup_cves(svc,
+                    api_key=config.get("nvd_api_key",""))
+                if cves:
+                    cves_by_service[svc] = cves
+
+            # Store for export
+            device_vulns[ip] = {
+                "nmap":            nmap_result,
+                "cves_by_service": cves_by_service
+            }
+
+            if popup.winfo_exists():
+                root.after(0, lambda: populate_cves(cves_by_service))
+
+        def populate_cves(cves_by_service):
+            nmap_status_var.set("◈ SCAN COMPLETE")
+            nmap_status_lbl.config(fg=GREEN)
+
+            all_cves = []
+            for svc, cves in cves_by_service.items():
+                for c2 in cves:
+                    if "error" not in c2:
+                        all_cves.append(c2)
+
+            if not all_cves:
+                tk.Label(inner,
+                    text="  ◈ No known CVEs found for detected services",
+                    bg=BG3, fg=DIM, font=best_font(7)).pack(anchor="w", pady=4)
+                return
+
+            # CVE section header
+            tk.Frame(inner, bg=MAGENTA_DIM, height=1).pack(
+                fill="x", pady=(8,2))
+            tk.Label(inner, text=f"  CVEs FOUND: {len(all_cves)}",
+                bg=BG3, fg=MAGENTA, font=best_font(8, True)).pack(anchor="w")
+
+            for cve in all_cves:
+                col = severity_color(cve["severity"])
+                cf  = tk.Frame(inner, bg=BG3)
+                cf.pack(fill="x", pady=2)
+
+                # Severity badge + ID
+                tk.Label(cf,
+                    text=f"[{cve['severity']}]",
+                    width=10, bg=BG3, fg=col,
+                    font=best_font(7, True), anchor="w").pack(side="left")
+                tk.Label(cf,
+                    text=cve["id"],
+                    bg=BG3, fg=WHITE,
+                    font=best_font(7, True), anchor="w").pack(side="left")
+                if cve.get("score"):
+                    tk.Label(cf,
+                        text=f"  Score: {cve['score']}",
+                        bg=BG3, fg=col,
+                        font=best_font(7), anchor="w").pack(side="left")
+
+                # Service
+                tk.Label(inner,
+                    text=f"    Service: {cve['service']}",
+                    bg=BG3, fg=DIM, font=best_font(7), anchor="w").pack(
+                    fill="x")
+
+                # Summary — wrapped
+                tk.Label(inner,
+                    text=f"    {cve['summary']}",
+                    bg=BG3, fg="#aaaacc",
+                    font=best_font(7),
+                    wraplength=320, justify="left", anchor="w").pack(
+                    fill="x", padx=4)
+
+                # Clickable URL
+                url_label = tk.Label(inner,
+                    text=f"    ► {cve['url']}",
+                    bg=BG3, fg=CYAN,
+                    font=best_font(7),
+                    cursor="hand2", anchor="w")
+                url_label.pack(fill="x")
+                url_label.bind("<Button-1>",
+                    lambda e, url=cve["url"]: __import__("webbrowser").open(url))
+
+                tk.Frame(inner, bg=DIM, height=1).pack(
+                    fill="x", pady=2)
+
+        threading.Thread(target=cve_thread, daemon=True).start()
 
     threading.Thread(target=run_nmap_thread, daemon=True).start()
 
@@ -811,20 +921,44 @@ def on_close():
     save_config({"window_size": root.geometry().split("+")[0]})
     if tray_icon["instance"]:
         tray_icon["instance"].stop()
+
+    from exporter import create_session_folder
+    from report_generator import generate_device_report, save_device_report
+
     if session_file["path"]:
         choice = ask_export_mode(root)
         if choice == "cancel":
             return
-        path = export_to_desktop(all_devices, subnet=subnets[0],
-            append_to=session_file["path"] if choice == "append" else None)
-    else:
-        # Export one CSV per subnet
-        paths = []
-        for sn, sd in subnet_data.items():
-            p = export_to_desktop(sd["devices"], subnet=sn)
-            paths.append(p)
-        path = ", ".join(paths)
 
+    folders = []
+    for sn, sd in subnet_data.items():
+        vuln_ips = set(device_vulns.keys())
+
+        if session_file["path"] and choice == "append":
+            export_to_desktop(sd["devices"], subnet=sn,
+                append_to=session_file["path"],
+                vuln_devices=vuln_ips)
+            folders.append(os.path.dirname(session_file["path"]))
+        else:
+            folder = create_session_folder(sn)
+            export_to_desktop(sd["devices"], subnet=sn,
+                folder=folder, vuln_devices=vuln_ips)
+
+            # Generate per-device vulnerability reports
+            for ip, vdata in device_vulns.items():
+                d_info = next((d for d in sd["devices"] if d["ip"] == ip), None)
+                if not d_info:
+                    continue
+                report = generate_device_report(
+                    d_info,
+                    vdata["nmap"],
+                    vdata["cves_by_service"]
+                )
+                save_device_report(report, ip, folder)
+
+            folders.append(folder)
+
+    path = ", ".join(folders)
     status_bar.config(text=f"◈ EXPORTED → {path}", fg=GREEN)
     root.after(1500, root.destroy)
 
