@@ -36,23 +36,29 @@ def best_font(size=10, bold=False):
 device_notes = {}
 
 # ── Subnet Dialog ─────────────────────────────────────────────────────────────
-def ask_subnet():
+def ask_subnet(error_msg=""):
     dialog = tk.Tk()
     dialog.title("NetPyWiz")
     dialog.configure(bg=BG)
-    dialog.geometry("500x280")
+    dialog.geometry("500x300")
     dialog.resizable(False, False)
     dialog.update_idletasks()
     x = (dialog.winfo_screenwidth() // 2) - 250
-    y = (dialog.winfo_screenheight() // 2) - 140
+    y = (dialog.winfo_screenheight() // 2) - 150
     dialog.geometry(f"+{x}+{y}")
     result = {"subnet": None}
 
     tk.Label(dialog, text="▓▓ NETPYWIZ // NETWORK MONITOR ▓▓",
-        bg=BG, fg=MAGENTA, font=best_font(13, True)).pack(pady=(28,4))
+        bg=BG, fg=MAGENTA, font=best_font(13, True)).pack(pady=(20,4))
     tk.Label(dialog, text="INITIALIZE SUBNET SCAN",
         bg=BG, fg=CYAN, font=best_font(9)).pack()
-    tk.Frame(dialog, bg=MAGENTA, height=1).pack(fill="x", padx=30, pady=14)
+
+    # Error message — only visible if something went wrong
+    if error_msg:
+        tk.Label(dialog, text=f"⚠  {error_msg}",
+            bg=BG, fg=RED, font=best_font(8, True)).pack(pady=(6,0))
+
+    tk.Frame(dialog, bg=MAGENTA, height=1).pack(fill="x", padx=30, pady=10)
     tk.Label(dialog, text="TARGET SUBNET  (CIDR notation)",
         bg=BG, fg=DIM, font=best_font(8)).pack()
 
@@ -137,11 +143,61 @@ splash.after(300, check_scan_done)
 splash.mainloop()
 
 if not devices:
-    import sys
-    tk.Tk().withdraw()
-    from tkinter import messagebox
-    messagebox.showerror("NetPyWiz", f"No devices found on {subnet}")
-    sys.exit()
+    # Loop back to subnet dialog with error message instead of exiting
+    while not devices:
+        subnet = ask_subnet(error_msg=f"No devices found on {subnet} — check subnet and try again")
+        if not subnet:
+            import sys; sys.exit()
+
+        # Re-run splash scan with new subnet
+        splash2 = tk.Tk()
+        splash2.title("NetPyWiz")
+        splash2.configure(bg=BG)
+        splash2.geometry("400x160")
+        splash2.resizable(False, False)
+        splash2.update_idletasks()
+        x2 = (splash2.winfo_screenwidth() // 2) - 200
+        y2 = (splash2.winfo_screenheight() // 2) - 80
+        splash2.geometry(f"+{x2}+{y2}")
+
+        tk.Label(splash2, text="▓▓ NETPYWIZ ▓▓",
+            bg=BG, fg=MAGENTA, font=best_font(14, True)).pack(pady=(24,4))
+        tk.Label(splash2, text=f"SCANNING  {subnet} ...",
+            bg=BG, fg=CYAN, font=best_font(10)).pack()
+        tk.Label(splash2, text="THIS MAY TAKE UP TO 30 SECONDS",
+            bg=BG, fg=DIM, font=best_font(8)).pack(pady=4)
+
+        dot_var2  = tk.StringVar(value="")
+        tk.Label(splash2, textvariable=dot_var2, bg=BG, fg=MAGENTA,
+            font=best_font(12)).pack()
+
+        scan_done2 = threading.Event()
+
+        def run_scan2():
+            found = scan_subnet(subnet)
+            for d in found:
+                d["port"]  = ""
+                d["notes"] = ""
+            devices.extend(found)
+            scan_done2.set()
+
+        def animate_dots2():
+            if scan_done2.is_set():
+                splash2.destroy()
+                return
+            dot_var2.set("█" * ((len(dot_var2.get()) % 8) + 1))
+            splash2.after(200, animate_dots2)
+
+        def check_done2():
+            if scan_done2.is_set():
+                splash2.destroy()
+            else:
+                splash2.after(300, check_done2)
+
+        threading.Thread(target=run_scan2, daemon=True).start()
+        splash2.after(200, animate_dots2)
+        splash2.after(300, check_done2)
+        splash2.mainloop()
 
 # ── Main Window ───────────────────────────────────────────────────────────────
 root = tk.Tk()
