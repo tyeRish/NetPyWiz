@@ -150,6 +150,45 @@ tk.Label(stats_frame, textvariable=new_var,
 
 tk.Frame(root, bg=CYAN, height=1).pack(fill="x")
 
+# ── Toolbar ───────────────────────────────────────────────────────────────────
+toolbar = tk.Frame(root, bg=BG2)
+toolbar.pack(fill="x")
+
+# Filter
+tk.Label(toolbar, text="⌕", bg=BG2, fg=CYAN,
+    font=best_font(13)).pack(side="left", padx=(16,4), pady=6)
+
+filter_var = tk.StringVar()
+filter_entry = tk.Entry(toolbar, textvariable=filter_var,
+    bg=BG3, fg=DIM, insertbackground=CYAN, selectbackground=MAGENTA_DIM,
+    font=best_font(10), relief="flat", bd=0, width=30)
+filter_entry.pack(side="left", ipady=5, pady=6)
+filter_entry.insert(0, "FILTER DEVICES...")
+
+def on_filter_focus_in(e):
+    if filter_entry.get() == "FILTER DEVICES...":
+        filter_entry.delete(0, "end")
+        filter_entry.config(fg=CYAN)
+
+def on_filter_focus_out(e):
+    if not filter_entry.get():
+        filter_entry.insert(0, "FILTER DEVICES...")
+        filter_entry.config(fg=DIM)
+
+filter_entry.bind("<FocusIn>",  on_filter_focus_in)
+filter_entry.bind("<FocusOut>", on_filter_focus_out)
+
+tk.Frame(toolbar, bg=CYAN, width=1).pack(side="left", fill="y", padx=4)
+
+# Rescan button
+rescan_btn = tk.Button(toolbar, text="⟳  RESCAN",
+    bg=BG3, fg=CYAN, font=best_font(9, True),
+    relief="flat", cursor="hand2",
+    activebackground=CYAN, activeforeground=BG, bd=0)
+rescan_btn.pack(side="left", padx=12, pady=6, ipadx=10)
+
+tk.Frame(root, bg=CYAN, height=1).pack(fill="x")
+
 # Table
 table_frame = tk.Frame(root, bg=BG)
 table_frame.pack(fill="both", expand=True)
@@ -473,6 +512,82 @@ def open_detail_popup(ip):
                 font=best_font(8), anchor="w").pack(side="left")
 
     threading.Thread(target=run_nmap_thread, daemon=True).start()
+
+# ── Filter logic ─────────────────────────────────────────────────────────────
+detached = set()
+
+def apply_filter(*args):
+    query = filter_var.get().strip().lower()
+    if query == "filter devices...":
+        query = ""
+    for d in devices:
+        ip = d["ip"]
+        haystack = " ".join([
+            ip,
+            d.get("hostname", ""),
+            d.get("vendor",   ""),
+            d.get("mac",      ""),
+            d.get("port",     ""),
+        ]).lower()
+        match = (query in haystack) if query else True
+        if not match and ip not in detached:
+            # Detach — tree.exists() is True here so safe to detach
+            tree.detach(ip)
+            detached.add(ip)
+        elif match and ip in detached:
+            # Reattach — detached items do NOT exist in tree
+            # so we must use reattach not insert
+            tree.reattach(ip, "", "end")
+            detached.discard(ip)
+
+filter_var.trace_add("write", apply_filter)
+
+# ── Rescan logic ──────────────────────────────────────────────────────────────
+rescan_running = threading.Event()
+
+def do_rescan():
+    if rescan_running.is_set():
+        return
+    rescan_running.set()
+    rescan_btn.config(state="disabled", text="⟳  SCANNING...")
+    status_bar.config(text="◈ RESCANNING SUBNET...", fg=AMBER)
+
+    def rescan_thread():
+        from scanner import scan_subnet
+        found        = scan_subnet(subnet)
+        existing_ips = {d["ip"] for d in devices}
+        new_devs     = []
+
+        for d in found:
+            if d["ip"] not in existing_ips:
+                d["port"]       = ""
+                d["notes"]      = ""
+                d["new_device"] = True
+                new_devs.append(d)
+                devices.append(d)
+                with status_lock:
+                    from monitor import ping_worker, history_lock
+                    status[d["ip"]] = {
+                        "alive": None, "latency": None,
+                        "avg_latency": None, "downtime": 0,
+                        "first_seen": None, "total_pings": 0,
+                        "online_pings": 0
+                    }
+                    latency_history[d["ip"]] = []
+                t = threading.Thread(target=ping_worker, args=(d["ip"],), daemon=True)
+                t.start()
+                root.after(0, lambda dev=d: add_device_row(dev))
+
+        msg = (f"◈ RESCAN COMPLETE  //  {len(new_devs)} NEW DEVICE(S) FOUND"
+               if new_devs else "◈ RESCAN COMPLETE  //  NO NEW DEVICES FOUND")
+        col = GREEN if new_devs else DIM
+        root.after(0, lambda: status_bar.config(text=msg, fg=col))
+        root.after(0, lambda: rescan_btn.config(state="normal", text="⟳  RESCAN"))
+        rescan_running.clear()
+
+    threading.Thread(target=rescan_thread, daemon=True).start()
+
+rescan_btn.config(command=do_rescan)
 
 # Click handlers
 def on_single_click(event):
