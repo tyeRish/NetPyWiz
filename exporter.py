@@ -3,11 +3,32 @@ import os
 from datetime import datetime
 from monitor import status, status_lock
 
+def get_real_user():
+    return os.environ.get("SUDO_USER") or os.environ.get("USER")
+
 def get_desktop_path():
-    real_user = os.environ.get("SUDO_USER") or os.environ.get("USER")
+    real_user = get_real_user()
     desktop   = f"/home/{real_user}/Desktop"
     os.makedirs(desktop, exist_ok=True)
     return desktop
+
+def fix_ownership(path: str):
+    """Recursively set ownership to the real user, not root."""
+    try:
+        import pwd
+        real_user = get_real_user()
+        pw        = pwd.getpwnam(real_user)
+        uid, gid  = pw.pw_uid, pw.pw_gid
+        # Walk directory or fix single file
+        if os.path.isdir(path):
+            for root_dir, dirs, files in os.walk(path):
+                os.chown(root_dir, uid, gid)
+                for f in files:
+                    os.chown(os.path.join(root_dir, f), uid, gid)
+        else:
+            os.chown(path, uid, gid)
+    except Exception as e:
+        print(f"Could not fix ownership: {e}")
 
 def subnet_to_filename(subnet: str) -> str:
     return subnet.replace("/", "-")
@@ -21,6 +42,7 @@ def create_session_folder(subnet: str) -> str:
         f"NetPyWiz_{subnet_str}_{timestamp}"
     )
     os.makedirs(folder, exist_ok=True)
+    fix_ownership(folder)
     return folder
 
 def export_to_desktop(devices: list[dict], append_to: str = None,
@@ -79,6 +101,7 @@ def export_to_desktop(devices: list[dict], append_to: str = None,
                 d.get("notes", "")
             ])
 
+    fix_ownership(filepath)
     print(f"{'Appended' if append_to else 'Exported'} to {filepath}")
     return filepath
 

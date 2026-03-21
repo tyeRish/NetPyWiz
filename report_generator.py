@@ -96,8 +96,16 @@ def generate_device_report(device: dict, nmap_result: dict,
 
 def save_device_report(report_str: str, ip: str, folder: str) -> str:
     """Saves report to folder/IP_vulnerability.txt"""
+    import pwd
     filename = f"{ip.replace('.', '_')}_vulnerability.txt"
     filepath = os.path.join(folder, filename)
     with open(filepath, "w") as f:
         f.write(report_str)
+    # Fix ownership so real user can delete it
+    try:
+        real_user = (os.environ.get("SUDO_USER") or os.environ.get("USER"))
+        pw        = pwd.getpwnam(real_user)
+        os.chown(filepath, pw.pw_uid, pw.pw_gid)
+    except Exception:
+        pass
     return filepath
