@@ -2,3 +2,10 @@ venv/
 __pycache__/
 *.pyc
 devices.json
+config.json
+.netpywiz_cache.json
+NetPyWiz.spec
+build/
+dist/
+patch_exit.py
+splash.py
