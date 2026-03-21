@@ -8,6 +8,7 @@ from sparkline import draw_sparkline
 from nmap_scan import run_nmap
 from startup import (ask_subnet, run_splash_scan, ask_rescan,
                      ask_export_mode, best_font)
+from config import load as load_config, save as save_config
 
 BG          = "#0a0a0f"
 BG2         = "#0f0f1a"
@@ -27,6 +28,7 @@ previous_macs = set()
 session_file  = {"path": None}
 devices       = []
 subnet        = "unknown"
+config        = load_config()
 
 # ── Single root — hidden during startup ───────────────────────────────────────
 root = tk.Tk()
@@ -61,7 +63,8 @@ except Exception as e:
 # ── Startup flow ──────────────────────────────────────────────────────────────
 error_msg = ""
 while not devices:
-    startup = ask_subnet(root, error_msg)
+    startup = ask_subnet(root, error_msg,
+                       default_subnet=config.get("last_subnet", "192.168.1.0/24"))
 
     if not startup["subnet"] and not startup["load_file"]:
         root.destroy()
@@ -112,9 +115,10 @@ while not devices:
             error_msg = f"No devices found on {subnet} — check subnet and try again"
             continue
         devices = scanned
+        save_config({"last_subnet": subnet})
 
 # ── Build main UI ─────────────────────────────────────────────────────────────
-root.geometry("1280x760")
+root.geometry(config.get("window_size", "1280x760"))
 root.minsize(900, 600)
 
 # Header
@@ -700,6 +704,8 @@ status_bar = tk.Label(bottom,
 status_bar.pack(side="left", padx=16)
 
 def on_close():
+    # Save window geometry for next launch
+    save_config({"window_size": root.geometry().split("+")[0]})
     if tray_icon["instance"]:
         tray_icon["instance"].stop()
     if session_file["path"]:

@@ -25,7 +25,7 @@ def best_font(size=10, bold=False):
         pass
     return ("Courier New", size, weight)
 
-def ask_subnet(root, error_msg=""):
+def ask_subnet(root, error_msg="", default_subnet="192.168.1.0/24"):
     result = {"subnet": None, "load_file": None}
 
     dialog = tk.Toplevel(root)
@@ -52,7 +52,7 @@ def ask_subnet(root, error_msg=""):
     tk.Label(dialog, text="TARGET SUBNET  (CIDR notation)",
         bg=BG, fg=DIM, font=best_font(8)).pack()
 
-    entry_var = tk.StringVar(value="192.168.1.0/24")
+    entry_var = tk.StringVar(value=default_subnet)
     entry = tk.Entry(dialog, textvariable=entry_var,
         bg=BG3, fg=CYAN, insertbackground=CYAN, selectbackground=MAGENTA,
         font=best_font(13), relief="flat", justify="center", bd=0)
