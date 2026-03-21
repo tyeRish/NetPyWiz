@@ -82,6 +82,7 @@ def ask_subnet():
         dialog.destroy()
 
     entry.bind("<Return>", confirm)
+    entry.bind("<KP_Enter>", confirm)
 
     tk.Button(dialog,
         text="► INITIATE SCAN",
