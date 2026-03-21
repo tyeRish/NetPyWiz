@@ -11,6 +11,7 @@ CYAN        = "#00f5ff"
 MAGENTA     = "#ff00ff"
 MAGENTA_DIM = "#cc00cc"
 RED         = "#ff2255"
+AMBER       = "#ffaa00"
 DIM         = "#444466"
 
 def best_font(size=10, bold=False):
@@ -25,55 +26,100 @@ def best_font(size=10, bold=False):
         pass
     return ("Courier New", size, weight)
 
-def ask_subnet(root, error_msg="", default_subnet="192.168.1.0/24"):
-    result = {"subnet": None, "load_file": None}
+
+def ask_subnets(root, error_msg="", default_subnet="192.168.1.0/24"):
+    """
+    Returns a list of subnet strings to scan, or empty list if cancelled.
+    Allows user to queue multiple subnets before scanning.
+    """
+    result    = {"subnets": [], "load_file": None, "cancelled": False}
+    queued    = []
 
     dialog = tk.Toplevel(root)
     dialog.title("NetPyWiz")
     dialog.configure(bg=BG)
-    dialog.geometry("500x340")
+    dialog.geometry("520x420")
     dialog.resizable(False, False)
     dialog.grab_set()
     dialog.update_idletasks()
-    x = (dialog.winfo_screenwidth() // 2) - 250
-    y = (dialog.winfo_screenheight() // 2) - 170
+    x = (dialog.winfo_screenwidth() // 2) - 260
+    y = (dialog.winfo_screenheight() // 2) - 210
     dialog.geometry(f"+{x}+{y}")
 
     tk.Label(dialog, text="▓▓ NETPYWIZ // NETWORK MONITOR ▓▓",
-        bg=BG, fg=MAGENTA, font=best_font(13, True)).pack(pady=(20,4))
+        bg=BG, fg=MAGENTA, font=best_font(13, True)).pack(pady=(16,4))
     tk.Label(dialog, text="INITIALIZE SUBNET SCAN",
         bg=BG, fg=CYAN, font=best_font(9)).pack()
 
     if error_msg:
         tk.Label(dialog, text=f"⚠  {error_msg}",
-            bg=BG, fg=RED, font=best_font(8, True)).pack(pady=(6,0))
+            bg=BG, fg=RED, font=best_font(8, True)).pack(pady=(4,0))
 
-    tk.Frame(dialog, bg=MAGENTA, height=1).pack(fill="x", padx=30, pady=10)
+    tk.Frame(dialog, bg=MAGENTA, height=1).pack(fill="x", padx=30, pady=8)
     tk.Label(dialog, text="TARGET SUBNET  (CIDR notation)",
         bg=BG, fg=DIM, font=best_font(8)).pack()
 
     entry_var = tk.StringVar(value=default_subnet)
     entry = tk.Entry(dialog, textvariable=entry_var,
         bg=BG3, fg=CYAN, insertbackground=CYAN, selectbackground=MAGENTA,
-        font=best_font(13), relief="flat", justify="center", bd=0)
-    entry.pack(padx=50, pady=10, ipady=8, fill="x")
+        font=best_font(12), relief="flat", justify="center", bd=0)
+    entry.pack(padx=50, pady=6, ipady=8, fill="x")
     entry.select_range(0, "end")
     entry.focus()
     tk.Frame(dialog, bg=CYAN, height=1).pack(fill="x", padx=50)
 
-    def confirm(event=None):
-        result["subnet"] = entry_var.get().strip()
-        dialog.grab_release()
-        dialog.destroy()
+    # Queue display
+    queue_frame = tk.Frame(dialog, bg=BG)
+    queue_frame.pack(fill="x", padx=50, pady=4)
 
-    entry.bind("<Return>",   confirm)
-    entry.bind("<KP_Enter>", confirm)
+    queue_label = tk.Label(queue_frame,
+        text="", bg=BG, fg=AMBER, font=best_font(8))
+    queue_label.pack(anchor="w")
 
-    tk.Button(dialog, text="► INITIATE SCAN", command=confirm,
-        bg=MAGENTA_DIM, fg=BG, font=best_font(11, True),
+    def refresh_queue():
+        if queued:
+            queue_label.config(
+                text="QUEUED:\n" + "\n".join(f"  ◈ {s}" for s in queued))
+        else:
+            queue_label.config(text="")
+
+    def add_to_queue(event=None):
+        val = entry_var.get().strip()
+        if val and val not in queued:
+            queued.append(val)
+            refresh_queue()
+            entry_var.set("")
+            entry.focus()
+
+    def start_scan(event=None):
+        val = entry_var.get().strip()
+        if val and val not in queued:
+            queued.append(val)
+        if queued:
+            result["subnets"] = list(queued)
+            dialog.grab_release()
+            dialog.destroy()
+
+    entry.bind("<Return>",   start_scan)
+    entry.bind("<KP_Enter>", start_scan)
+
+    # Buttons
+    btn_frame = tk.Frame(dialog, bg=BG)
+    btn_frame.pack(pady=6)
+
+    tk.Button(btn_frame, text="+ ADD ANOTHER SUBNET",
+        command=add_to_queue,
+        bg=BG3, fg=CYAN, font=best_font(9),
+        relief="flat", cursor="hand2",
+        activebackground=CYAN, activeforeground=BG, bd=0
+    ).pack(side="left", padx=6, ipadx=10, ipady=4)
+
+    tk.Button(btn_frame, text="► INITIATE SCAN",
+        command=start_scan,
+        bg=MAGENTA_DIM, fg=BG, font=best_font(9, True),
         relief="flat", cursor="hand2",
         activebackground=MAGENTA, activeforeground=BG, bd=0
-    ).pack(pady=(14,6), ipadx=20, ipady=6)
+    ).pack(side="left", padx=6, ipadx=10, ipady=4)
 
     tk.Frame(dialog, bg=DIM, height=1).pack(fill="x", padx=30, pady=8)
     tk.Label(dialog, text="— OR LOAD A PREVIOUS SESSION —",
@@ -94,7 +140,13 @@ def ask_subnet(root, error_msg="", default_subnet="192.168.1.0/24"):
         bg=BG3, fg=CYAN, font=best_font(9),
         relief="flat", cursor="hand2",
         activebackground=CYAN, activeforeground=BG, bd=0
-    ).pack(pady=8, ipadx=16, ipady=4)
+    ).pack(pady=6, ipadx=16, ipady=4)
+
+    dialog.protocol("WM_DELETE_WINDOW", lambda: (
+        result.update({"cancelled": True}),
+        dialog.grab_release(),
+        dialog.destroy()
+    ))
 
     root.wait_window(dialog)
     return result
@@ -131,12 +183,12 @@ def run_splash_scan(root, subnet_str):
     def run_scan():
         result = scan_subnet(subnet_str)
         for d in result:
-            d["port"]  = d.get("port",  "")
-            d["notes"] = d.get("notes", "")
+            d["port"]   = d.get("port",  "")
+            d["notes"]  = d.get("notes", "")
+            d["subnet"] = subnet_str
         found.extend(result)
         stop_anim.set()
         scan_done.set()
-        # Do NOT call root.after from here — let poll_done handle it
 
     def animate_dots():
         if stop_anim.is_set():
@@ -145,7 +197,6 @@ def run_splash_scan(root, subnet_str):
         splash.after(200, animate_dots)
 
     def poll_done():
-        # Called only from main thread via after() — safe to destroy
         if scan_done.is_set():
             splash.grab_release()
             splash.destroy()

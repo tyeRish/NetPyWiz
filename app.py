@@ -6,7 +6,7 @@ from monitor import start_monitor, status, status_lock, latency_history, history
 from exporter import export_to_desktop, load_session_csv
 from sparkline import draw_sparkline
 from nmap_scan import run_nmap
-from startup import (ask_subnet, run_splash_scan, ask_rescan,
+from startup import (ask_subnets, run_splash_scan, ask_rescan,
                      ask_export_mode, best_font)
 from config import load as load_config, save as save_config
 
@@ -26,17 +26,19 @@ YELLOW      = "#ffe94d"
 device_notes  = {}
 previous_macs = set()
 session_file  = {"path": None}
-devices       = []
-subnet        = "unknown"
 config        = load_config()
 
-# ── Single root — hidden during startup ───────────────────────────────────────
+# subnet_data holds everything per subnet
+# { subnet_str: { "devices": [], "tree": widget, ... } }
+subnet_data = {}
+
+# ── Single root ───────────────────────────────────────────────────────────────
 root = tk.Tk()
 root.withdraw()
 root.title("NetPyWiz — Network Monitor")
 root.configure(bg=BG)
 
-# Set icon early so all Toplevels inherit it
+# Set icon early — all Toplevels inherit
 try:
     from PIL import Image, ImageDraw, ImageTk
 
@@ -48,29 +50,29 @@ try:
             x = 13 + i * 5
             draw.rectangle([x, 20, x+3, 36], fill="#ffaa00")
         draw.rectangle([20, 48, 44, 56], outline="#ff00ff", width=1, fill="#1a1a2e")
-        draw.rectangle([4,  4,  12, 12], fill="#00f5ff")
-        draw.rectangle([52, 4,  60, 12], fill="#00f5ff")
-        draw.rectangle([4,  52, 12, 60], fill="#00f5ff")
-        draw.rectangle([52, 52, 60, 60], fill="#00f5ff")
+        for rx, ry in [(4,4),(52,4),(4,52),(52,52)]:
+            draw.rectangle([rx, ry, rx+8, ry+8], fill="#00f5ff")
         return img
 
-    _icon_img  = _make_icon()
-    _icon_photo = ImageTk.PhotoImage(_icon_img)
-    root.iconphoto(True, _icon_photo)  # True = apply to all future Toplevels too
+    _icon_photo = ImageTk.PhotoImage(_make_icon())
+    root.iconphoto(True, _icon_photo)
 except Exception as e:
-    print(f"Could not set icon: {e}")
+    print(f"Icon error: {e}")
 
 # ── Startup flow ──────────────────────────────────────────────────────────────
-error_msg = ""
-while not devices:
-    startup = ask_subnet(root, error_msg,
-                       default_subnet=config.get("last_subnet", "192.168.1.0/24"))
+error_msg  = ""
+all_devices = []  # flat list across all subnets
+subnets    = []   # list of subnet strings
 
-    if not startup["subnet"] and not startup["load_file"]:
+while not subnets:
+    startup = ask_subnets(root, error_msg,
+        default_subnet=config.get("last_subnet", "192.168.1.0/24"))
+
+    if startup.get("cancelled"):
         root.destroy()
         import sys; sys.exit()
 
-    if startup["load_file"]:
+    if startup.get("load_file"):
         loaded = load_session_csv(startup["load_file"])
         if not loaded:
             error_msg = "Could not read session file — try another"
@@ -99,25 +101,46 @@ while not devices:
                         if ld["ip"] == d["ip"]:
                             ld["hostname"] = d["hostname"]
                             ld["vendor"]   = d["vendor"]
-            devices = loaded
+            all_devices = loaded
+            subnets     = [subnet]
 
         elif choice == "monitor_only":
-            devices = loaded
+            all_devices = loaded
+            subnets     = [subnet]
 
-        else:
-            error_msg = ""
-            continue
+    elif startup.get("subnets"):
+        subnets_to_scan = startup["subnets"]
+        found_any = False
 
-    else:
-        subnet  = startup["subnet"]
-        scanned = run_splash_scan(root, subnet)
-        if not scanned:
-            error_msg = f"No devices found on {subnet} — check subnet and try again"
-            continue
-        devices = scanned
-        save_config({"last_subnet": subnet})
+        for sn in subnets_to_scan:
+            scanned = run_splash_scan(root, sn)
+            if scanned:
+                all_devices.extend(scanned)
+                subnets.append(sn)
+                found_any = True
+                save_config({"last_subnet": sn})
 
-# ── Build main UI ─────────────────────────────────────────────────────────────
+        if not found_any:
+            error_msg = "No devices found on any subnet — check and try again"
+            subnets   = []
+            all_devices = []
+
+# Group devices by subnet
+for sn in subnets:
+    subnet_data[sn] = {
+        "devices": [d for d in all_devices if d.get("subnet", sn) == sn
+                    or (len(subnets) == 1)],
+        "selected_ip":   {"ip": None},
+        "detached":      set(),
+        "filter_var":    None,
+        "tree":          None,
+        "spark_mini":    None,
+        "info_vars":     {},
+        "status_bar":    None,
+        "rescan_btn":    None,
+    }
+
+# ── Main Window ───────────────────────────────────────────────────────────────
 root.geometry(config.get("window_size", "1280x760"))
 root.minsize(900, 600)
 
@@ -151,7 +174,9 @@ if session_file["path"]:
 clock_var = tk.StringVar()
 tk.Label(header, textvariable=clock_var,
     bg=BG2, fg=DIM, font=best_font(10)).pack(side="right", padx=20)
-tk.Label(header, text=f"◈  {subnet}  ◈  {len(devices)} DEVICES",
+
+subnet_summary = " + ".join(subnets)
+tk.Label(header, text=f"◈  {subnet_summary}  ◈  {len(all_devices)} DEVICES",
     bg=BG2, fg=AMBER, font=best_font(9)).pack(side="right", padx=10)
 
 def tick():
@@ -161,7 +186,7 @@ tick()
 
 tk.Frame(root, bg=MAGENTA, height=2).pack(fill="x")
 
-# Stats bar
+# Global stats bar
 stats_frame = tk.Frame(root, bg=BG2)
 stats_frame.pack(fill="x")
 
@@ -174,53 +199,11 @@ for var, color in [(online_var, GREEN), (offline_var, RED), (unknown_var, DIM)]:
     tk.Label(stats_frame, textvariable=var, bg=BG2, fg=color,
         font=best_font(9, True)).pack(side="left", padx=20, pady=4)
 tk.Label(stats_frame, textvariable=new_var,
-    bg=BG2, fg=YELLOW, font=best_font(9, True)).pack(side="left", padx=20, pady=4)
+    bg=BG2, fg=YELLOW, font=best_font(9, True)).pack(side="left", padx=20)
 
 tk.Frame(root, bg=CYAN, height=1).pack(fill="x")
 
-# ── Toolbar ───────────────────────────────────────────────────────────────────
-toolbar = tk.Frame(root, bg=BG2)
-toolbar.pack(fill="x")
-
-# Filter
-tk.Label(toolbar, text="⌕", bg=BG2, fg=CYAN,
-    font=best_font(13)).pack(side="left", padx=(16,4), pady=6)
-
-filter_var = tk.StringVar()
-filter_entry = tk.Entry(toolbar, textvariable=filter_var,
-    bg=BG3, fg=DIM, insertbackground=CYAN, selectbackground=MAGENTA_DIM,
-    font=best_font(10), relief="flat", bd=0, width=30)
-filter_entry.pack(side="left", ipady=5, pady=6)
-filter_entry.insert(0, "FILTER DEVICES...")
-
-def on_filter_focus_in(e):
-    if filter_entry.get() == "FILTER DEVICES...":
-        filter_entry.delete(0, "end")
-        filter_entry.config(fg=CYAN)
-
-def on_filter_focus_out(e):
-    if not filter_entry.get():
-        filter_entry.insert(0, "FILTER DEVICES...")
-        filter_entry.config(fg=DIM)
-
-filter_entry.bind("<FocusIn>",  on_filter_focus_in)
-filter_entry.bind("<FocusOut>", on_filter_focus_out)
-
-tk.Frame(toolbar, bg=CYAN, width=1).pack(side="left", fill="y", padx=4)
-
-# Rescan button
-rescan_btn = tk.Button(toolbar, text="⟳  RESCAN",
-    bg=BG3, fg=CYAN, font=best_font(9, True),
-    relief="flat", cursor="hand2",
-    activebackground=CYAN, activeforeground=BG, bd=0)
-rescan_btn.pack(side="left", padx=12, pady=6, ipadx=10)
-
-tk.Frame(root, bg=CYAN, height=1).pack(fill="x")
-
-# Table
-table_frame = tk.Frame(root, bg=BG)
-table_frame.pack(fill="both", expand=True)
-
+# ── Notebook (tabs) ───────────────────────────────────────────────────────────
 style = ttk.Style()
 style.theme_use("clam")
 style.configure("Treeview",
@@ -234,8 +217,19 @@ style.map("Treeview",
     foreground=[("selected", CYAN)])
 style.layout("Treeview", [('Treeview.treearea', {'sticky': 'nswe'})])
 
-columns = ("status","ip","mac","hostname","vendor","port","latency","avg_latency","downtime")
-tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
+# Tab styling
+style.configure("TNotebook",
+    background=BG, borderwidth=0, tabmargins=0)
+style.configure("TNotebook.Tab",
+    background=BG2, foreground=DIM,
+    font=best_font(9, True), padding=[16,6],
+    borderwidth=0)
+style.map("TNotebook.Tab",
+    background=[("selected", BG3)],
+    foreground=[("selected", CYAN)])
+
+notebook = ttk.Notebook(root)
+notebook.pack(fill="both", expand=True)
 
 col_defs = {
     "status":      ("STATUS",      90),
@@ -248,123 +242,299 @@ col_defs = {
     "avg_latency": ("AVG ms",      90),
     "downtime":    ("DOWN s",      80),
 }
+columns = list(col_defs.keys())
 
-for col, (label, width) in col_defs.items():
-    tree.heading(col, text=label)
-    tree.column(col, width=width,
-        anchor="center" if col in ("status","port","latency","avg_latency","downtime") else "w")
+def build_tab(sn):
+    """Builds a full tab UI for one subnet."""
+    sd = subnet_data[sn]
 
-tree.tag_configure("green",   background=BG3, foreground=GREEN)
-tree.tag_configure("red",     background=BG3, foreground=RED)
-tree.tag_configure("unknown", background=BG3, foreground=DIM)
-tree.tag_configure("new",     background="#1a1a00", foreground=YELLOW)
+    tab = tk.Frame(notebook, bg=BG)
+    notebook.add(tab, text=f"  {sn}  ")
 
-scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-tree.configure(yscrollcommand=scrollbar.set)
-tree.pack(side="left", fill="both", expand=True)
-scrollbar.pack(side="right", fill="y")
+    # Toolbar
+    toolbar = tk.Frame(tab, bg=BG2)
+    toolbar.pack(fill="x")
 
-def add_device_row(d):
-    if tree.exists(d["ip"]):
-        return
-    is_new = d.get("new_device", False)
-    tag    = "new"   if is_new else "unknown"
-    label  = "★ NEW" if is_new else "◈ INIT"
-    tree.insert("", "end", iid=d["ip"], values=(
-        label, d["ip"], d["mac"], d["hostname"],
-        d["vendor"], d.get("port",""), "", "", "0"
-    ), tags=(tag,))
+    tk.Label(toolbar, text="⌕", bg=BG2, fg=CYAN,
+        font=best_font(13)).pack(side="left", padx=(16,4), pady=6)
 
-for d in devices:
-    add_device_row(d)
+    filter_var = tk.StringVar()
+    sd["filter_var"] = filter_var
 
-# Info bar
-tk.Frame(root, bg=MAGENTA, height=1).pack(fill="x")
-info_bar = tk.Frame(root, bg=BG2, height=90)
-info_bar.pack(fill="x")
-info_bar.pack_propagate(False)
+    filter_entry = tk.Entry(toolbar, textvariable=filter_var,
+        bg=BG3, fg=DIM, insertbackground=CYAN,
+        selectbackground=MAGENTA_DIM,
+        font=best_font(10), relief="flat", bd=0, width=30)
+    filter_entry.pack(side="left", ipady=5, pady=6)
+    filter_entry.insert(0, "FILTER DEVICES...")
 
-info_ip_var     = tk.StringVar(value="")
-info_status_var = tk.StringVar(value="")
-info_lat_var    = tk.StringVar(value="")
-info_avg_var    = tk.StringVar(value="")
-info_down_var   = tk.StringVar(value="")
-info_vendor_var = tk.StringVar(value="")
-info_mac_var    = tk.StringVar(value="")
+    def on_focus_in(e):
+        if filter_entry.get() == "FILTER DEVICES...":
+            filter_entry.delete(0, "end")
+            filter_entry.config(fg=CYAN)
 
-left_info = tk.Frame(info_bar, bg=BG2)
-left_info.pack(side="left", padx=16, pady=8)
-tk.Label(left_info, textvariable=info_ip_var,
-    bg=BG2, fg=MAGENTA, font=best_font(14, True)).pack(anchor="w")
-tk.Label(left_info, textvariable=info_status_var,
-    bg=BG2, fg=GREEN, font=best_font(9)).pack(anchor="w")
+    def on_focus_out(e):
+        if not filter_entry.get():
+            filter_entry.insert(0, "FILTER DEVICES...")
+            filter_entry.config(fg=DIM)
 
-tk.Frame(info_bar, bg=DIM, width=1).pack(side="left", fill="y", pady=8)
+    filter_entry.bind("<FocusIn>",  on_focus_in)
+    filter_entry.bind("<FocusOut>", on_focus_out)
 
-mid_info = tk.Frame(info_bar, bg=BG2)
-mid_info.pack(side="left", padx=16, pady=8)
-for label, var, color in [
-    ("LATENCY",  info_lat_var,  CYAN),
-    ("AVG",      info_avg_var,  CYAN),
-    ("DOWNTIME", info_down_var, RED),
-]:
-    row = tk.Frame(mid_info, bg=BG2)
-    row.pack(anchor="w")
-    tk.Label(row, text=f"{label:<10}", bg=BG2, fg=DIM,
-        font=best_font(8)).pack(side="left")
-    tk.Label(row, textvariable=var, bg=BG2, fg=color,
-        font=best_font(8, True)).pack(side="left")
+    tk.Frame(toolbar, bg=CYAN, width=1).pack(side="left", fill="y", padx=4)
 
-tk.Frame(info_bar, bg=DIM, width=1).pack(side="left", fill="y", pady=8)
+    rescan_btn = tk.Button(toolbar, text="⟳  RESCAN",
+        bg=BG3, fg=CYAN, font=best_font(9, True),
+        relief="flat", cursor="hand2",
+        activebackground=CYAN, activeforeground=BG, bd=0)
+    rescan_btn.pack(side="left", padx=12, pady=6, ipadx=10)
+    sd["rescan_btn"] = rescan_btn
 
-right_info = tk.Frame(info_bar, bg=BG2)
-right_info.pack(side="left", padx=16, pady=8)
-for label, var in [("VENDOR", info_vendor_var), ("MAC", info_mac_var)]:
-    row = tk.Frame(right_info, bg=BG2)
-    row.pack(anchor="w")
-    tk.Label(row, text=f"{label:<8}", bg=BG2, fg=DIM,
-        font=best_font(8)).pack(side="left")
-    tk.Label(row, textvariable=var, bg=BG2, fg=WHITE,
-        font=best_font(8)).pack(side="left")
+    tk.Frame(tab, bg=CYAN, height=1).pack(fill="x")
 
-spark_mini = tk.Canvas(info_bar, width=200, height=70,
-    bg=BG2, highlightthickness=0)
-spark_mini.pack(side="right", padx=16, pady=8)
+    # Table
+    table_frame = tk.Frame(tab, bg=BG)
+    table_frame.pack(fill="both", expand=True)
 
-tk.Label(info_bar,
-    text="◈ CLICK ROW TO INSPECT  //  DOUBLE-CLICK FOR FULL DETAIL",
-    bg=BG2, fg=DIM, font=best_font(7)).pack(side="right", padx=8)
+    tree = ttk.Treeview(table_frame, columns=columns,
+        show="headings", selectmode="browse")
+    sd["tree"] = tree
 
-selected_ip = {"ip": None}
+    for col, (label, width) in col_defs.items():
+        tree.heading(col, text=label)
+        tree.column(col, width=width,
+            anchor="center" if col in
+                ("status","port","latency","avg_latency","downtime") else "w")
 
-def update_info_bar(ip):
-    selected_ip["ip"] = ip
-    d_info = next((d for d in devices if d["ip"] == ip), {})
+    tree.tag_configure("green",   background=BG3, foreground=GREEN)
+    tree.tag_configure("red",     background=BG3, foreground=RED)
+    tree.tag_configure("unknown", background=BG3, foreground=DIM)
+    tree.tag_configure("new",     background="#1a1a00", foreground=YELLOW)
+
+    scrollbar = ttk.Scrollbar(table_frame, orient="vertical",
+        command=tree.yview)
+    tree.configure(yscrollcommand=scrollbar.set)
+    tree.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    # Populate rows
+    for d in sd["devices"]:
+        is_new = d.get("new_device", False)
+        tree.insert("", "end", iid=d["ip"], values=(
+            "★ NEW" if is_new else "◈ INIT",
+            d["ip"], d["mac"], d["hostname"], d["vendor"],
+            d.get("port",""), "", "", "0"
+        ), tags=("new" if is_new else "unknown",))
+
+    # Info bar
+    tk.Frame(tab, bg=MAGENTA, height=1).pack(fill="x")
+    info_bar = tk.Frame(tab, bg=BG2, height=90)
+    info_bar.pack(fill="x")
+    info_bar.pack_propagate(False)
+
+    ivars = {
+        "ip":     tk.StringVar(),
+        "status": tk.StringVar(),
+        "lat":    tk.StringVar(),
+        "avg":    tk.StringVar(),
+        "down":   tk.StringVar(),
+        "vendor": tk.StringVar(),
+        "mac":    tk.StringVar(),
+    }
+    sd["info_vars"] = ivars
+
+    li = tk.Frame(info_bar, bg=BG2)
+    li.pack(side="left", padx=16, pady=8)
+    tk.Label(li, textvariable=ivars["ip"],
+        bg=BG2, fg=MAGENTA, font=best_font(14, True)).pack(anchor="w")
+    tk.Label(li, textvariable=ivars["status"],
+        bg=BG2, fg=GREEN, font=best_font(9)).pack(anchor="w")
+
+    tk.Frame(info_bar, bg=DIM, width=1).pack(side="left", fill="y", pady=8)
+
+    mi = tk.Frame(info_bar, bg=BG2)
+    mi.pack(side="left", padx=16, pady=8)
+    for lbl, key, col in [
+        ("LATENCY",  "lat",  CYAN),
+        ("AVG",      "avg",  CYAN),
+        ("DOWNTIME", "down", RED),
+    ]:
+        row = tk.Frame(mi, bg=BG2)
+        row.pack(anchor="w")
+        tk.Label(row, text=f"{lbl:<10}", bg=BG2, fg=DIM,
+            font=best_font(8)).pack(side="left")
+        tk.Label(row, textvariable=ivars[key], bg=BG2, fg=col,
+            font=best_font(8, True)).pack(side="left")
+
+    tk.Frame(info_bar, bg=DIM, width=1).pack(side="left", fill="y", pady=8)
+
+    ri = tk.Frame(info_bar, bg=BG2)
+    ri.pack(side="left", padx=16, pady=8)
+    for lbl, key in [("VENDOR", "vendor"), ("MAC", "mac")]:
+        row = tk.Frame(ri, bg=BG2)
+        row.pack(anchor="w")
+        tk.Label(row, text=f"{lbl:<8}", bg=BG2, fg=DIM,
+            font=best_font(8)).pack(side="left")
+        tk.Label(row, textvariable=ivars[key], bg=BG2, fg=WHITE,
+            font=best_font(8)).pack(side="left")
+
+    spark_mini = tk.Canvas(info_bar, width=200, height=70,
+        bg=BG2, highlightthickness=0)
+    spark_mini.pack(side="right", padx=16, pady=8)
+    sd["spark_mini"] = spark_mini
+
+    tk.Label(info_bar,
+        text="◈ CLICK TO INSPECT  //  DOUBLE-CLICK FOR DETAIL",
+        bg=BG2, fg=DIM, font=best_font(7)).pack(side="right", padx=8)
+
+    # Filter logic
+    def apply_filter(*args, _sn=sn):
+        _sd    = subnet_data[_sn]
+        query  = _sd["filter_var"].get().strip().lower()
+        if query == "filter devices...":
+            query = ""
+        for d in _sd["devices"]:
+            ip       = d["ip"]
+            haystack = " ".join([ip,
+                d.get("hostname",""), d.get("vendor",""),
+                d.get("mac",""),      d.get("port","")]).lower()
+            match = (query in haystack) if query else True
+            if not match and ip not in _sd["detached"]:
+                _sd["tree"].detach(ip)
+                _sd["detached"].add(ip)
+            elif match and ip in _sd["detached"]:
+                _sd["tree"].reattach(ip, "", "end")
+                _sd["detached"].discard(ip)
+
+    filter_var.trace_add("write", apply_filter)
+
+    # Rescan logic
+    rescan_running = threading.Event()
+
+    def do_rescan(_sn=sn):
+        if rescan_running.is_set():
+            return
+        rescan_running.set()
+        sd2 = subnet_data[_sn]
+        sd2["rescan_btn"].config(state="disabled", text="⟳  SCANNING...")
+
+        def rescan_thread():
+            from scanner import scan_subnet as _scan
+            from monitor import ping_worker
+            found        = _scan(_sn)
+            existing_ips = {d["ip"] for d in sd2["devices"]}
+            new_devs     = []
+
+            for d in found:
+                if d["ip"] not in existing_ips:
+                    d["port"]       = ""
+                    d["notes"]      = ""
+                    d["new_device"] = True
+                    d["subnet"]     = _sn
+                    new_devs.append(d)
+                    sd2["devices"].append(d)
+                    all_devices.append(d)
+                    with status_lock:
+                        status[d["ip"]] = {
+                            "alive": None, "latency": None,
+                            "avg_latency": None, "downtime": 0,
+                            "first_seen": None, "total_pings": 0,
+                            "online_pings": 0
+                        }
+                    with history_lock:
+                        latency_history[d["ip"]] = []
+                    t = threading.Thread(
+                        target=ping_worker, args=(d["ip"],), daemon=True)
+                    t.start()
+                    root.after(0, lambda dev=d, t=sd2["tree"]: (
+                        t.exists(dev["ip"]) or t.insert(
+                            "", "end", iid=dev["ip"],
+                            values=("★ NEW", dev["ip"], dev["mac"],
+                                    dev["hostname"], dev["vendor"],
+                                    "", "", "", "0"),
+                            tags=("new",))
+                    ))
+
+            msg = (f"◈ RESCAN COMPLETE  //  {len(new_devs)} NEW"
+                   if new_devs else "◈ RESCAN COMPLETE  //  NO NEW DEVICES")
+            col = GREEN if new_devs else DIM
+            root.after(0, lambda: sd2["rescan_btn"].config(
+                state="normal", text="⟳  RESCAN"))
+            rescan_running.clear()
+
+        threading.Thread(target=rescan_thread, daemon=True).start()
+
+    rescan_btn.config(command=do_rescan)
+
+    # Click handlers
+    def on_single_click(event, _sn=sn):
+        _sd  = subnet_data[_sn]
+        item = _sd["tree"].identify_row(event.y)
+        if not item:
+            return
+        _sd["selected_ip"]["ip"] = item
+        update_info_bar(_sn, item)
+
+    def on_double_click(event, _sn=sn):
+        _sd  = subnet_data[_sn]
+        item = _sd["tree"].identify_row(event.y)
+        col  = _sd["tree"].identify_column(event.x)
+        if not item:
+            return
+        if col == "#6":
+            cur = _sd["tree"].item(item)["values"][5]
+            new_val = simpledialog.askstring(
+                "Switch Port", f"Enter switch port for {item}:",
+                initialvalue=cur, parent=root)
+            if new_val is not None:
+                ex    = list(_sd["tree"].item(item)["values"])
+                ex[5] = new_val
+                _sd["tree"].item(item, values=ex)
+                for d in _sd["devices"]:
+                    if d["ip"] == item:
+                        d["port"] = new_val
+            return
+        open_detail_popup(item)
+
+    tree.bind("<Button-1>", on_single_click)
+    tree.bind("<Double-1>", on_double_click)
+
+# Build all tabs
+for sn in subnets:
+    build_tab(sn)
+
+# ── Info bar updater ──────────────────────────────────────────────────────────
+def update_info_bar(sn, ip):
+    sd     = subnet_data[sn]
+    d_info = next((d for d in sd["devices"] if d["ip"] == ip), {})
     with status_lock:
         s = dict(status.get(ip, {}))
     with history_lock:
         samples = list(latency_history.get(ip, []))
     alive = s.get("alive")
-    info_ip_var.set(ip)
-    info_status_var.set("▲ ONLINE" if alive else "▼ OFFLINE" if alive is False else "◈ INIT")
-    info_lat_var.set(f"{s.get('latency') or '---'} ms")
-    info_avg_var.set(f"{s.get('avg_latency') or '---'} ms")
-    info_down_var.set(f"{s.get('downtime', 0)}s")
-    info_vendor_var.set(d_info.get("vendor", ""))
-    info_mac_var.set(d_info.get("mac", ""))
-    draw_sparkline(spark_mini, samples, 200, 70, mini=True)
+    iv    = sd["info_vars"]
+    iv["ip"].set(ip)
+    iv["status"].set("▲ ONLINE" if alive else "▼ OFFLINE" if alive is False else "◈ INIT")
+    iv["lat"].set(f"{s.get('latency') or '---'} ms")
+    iv["avg"].set(f"{s.get('avg_latency') or '---'} ms")
+    iv["down"].set(f"{s.get('downtime', 0)}s")
+    iv["vendor"].set(d_info.get("vendor", ""))
+    iv["mac"].set(d_info.get("mac", ""))
+    draw_sparkline(sd["spark_mini"], samples, 200, 70, mini=True)
 
-def refresh_info_bar():
-    if selected_ip["ip"]:
-        try:
-            update_info_bar(selected_ip["ip"])
-        except Exception:
-            pass
-    root.after(1000, refresh_info_bar)
+def refresh_all_info_bars():
+    for sn, sd in subnet_data.items():
+        ip = sd["selected_ip"]["ip"]
+        if ip:
+            try:
+                update_info_bar(sn, ip)
+            except Exception:
+                pass
+    root.after(1000, refresh_all_info_bars)
 
-# Detail popup
+# ── Detail popup ──────────────────────────────────────────────────────────────
 def open_detail_popup(ip):
-    d_info = next((d for d in devices if d["ip"] == ip), {})
+    d_info = next((d for d in all_devices if d["ip"] == ip), {})
 
     popup = tk.Toplevel(root)
     popup.title(f"NetPyWiz  //  {ip}")
@@ -433,6 +603,7 @@ def open_detail_popup(ip):
         ("UPTIME",      f"{uptime}%",                GREEN),
         ("MAC",         d_info.get("mac","---"),     WHITE),
         ("SW PORT",     d_info.get("port","---"),    AMBER),
+        ("SUBNET",      d_info.get("subnet","---"),  CYAN),
     ]
 
     for label, val, col in stats:
@@ -453,13 +624,13 @@ def open_detail_popup(ip):
 
     def save_notes(event=None):
         device_notes[ip] = notes_box.get("1.0", "end-1c")
-        for d in devices:
+        for d in all_devices:
             if d["ip"] == ip:
                 d["notes"] = device_notes[ip]
 
     notes_box.bind("<KeyRelease>", save_notes)
 
-    # nmap panel
+    # nmap
     tk.Label(right, text="NMAP SCAN",
         bg=BG, fg=CYAN, font=best_font(8, True)).pack(anchor="w")
 
@@ -541,158 +712,91 @@ def open_detail_popup(ip):
 
     threading.Thread(target=run_nmap_thread, daemon=True).start()
 
-# ── Filter logic ─────────────────────────────────────────────────────────────
-detached = set()
-
-def apply_filter(*args):
-    query = filter_var.get().strip().lower()
-    if query == "filter devices...":
-        query = ""
-    for d in devices:
-        ip = d["ip"]
-        haystack = " ".join([
-            ip,
-            d.get("hostname", ""),
-            d.get("vendor",   ""),
-            d.get("mac",      ""),
-            d.get("port",     ""),
-        ]).lower()
-        match = (query in haystack) if query else True
-        if not match and ip not in detached:
-            # Detach — tree.exists() is True here so safe to detach
-            tree.detach(ip)
-            detached.add(ip)
-        elif match and ip in detached:
-            # Reattach — detached items do NOT exist in tree
-            # so we must use reattach not insert
-            tree.reattach(ip, "", "end")
-            detached.discard(ip)
-
-filter_var.trace_add("write", apply_filter)
-
-# ── Rescan logic ──────────────────────────────────────────────────────────────
-rescan_running = threading.Event()
-
-def do_rescan():
-    if rescan_running.is_set():
-        return
-    rescan_running.set()
-    rescan_btn.config(state="disabled", text="⟳  SCANNING...")
-    status_bar.config(text="◈ RESCANNING SUBNET...", fg=AMBER)
-
-    def rescan_thread():
-        from scanner import scan_subnet
-        found        = scan_subnet(subnet)
-        existing_ips = {d["ip"] for d in devices}
-        new_devs     = []
-
-        for d in found:
-            if d["ip"] not in existing_ips:
-                d["port"]       = ""
-                d["notes"]      = ""
-                d["new_device"] = True
-                new_devs.append(d)
-                devices.append(d)
-                with status_lock:
-                    from monitor import ping_worker, history_lock
-                    status[d["ip"]] = {
-                        "alive": None, "latency": None,
-                        "avg_latency": None, "downtime": 0,
-                        "first_seen": None, "total_pings": 0,
-                        "online_pings": 0
-                    }
-                    latency_history[d["ip"]] = []
-                t = threading.Thread(target=ping_worker, args=(d["ip"],), daemon=True)
-                t.start()
-                root.after(0, lambda dev=d: add_device_row(dev))
-
-        msg = (f"◈ RESCAN COMPLETE  //  {len(new_devs)} NEW DEVICE(S) FOUND"
-               if new_devs else "◈ RESCAN COMPLETE  //  NO NEW DEVICES FOUND")
-        col = GREEN if new_devs else DIM
-        root.after(0, lambda: status_bar.config(text=msg, fg=col))
-        root.after(0, lambda: rescan_btn.config(state="normal", text="⟳  RESCAN"))
-        rescan_running.clear()
-
-    threading.Thread(target=rescan_thread, daemon=True).start()
-
-rescan_btn.config(command=do_rescan)
-
-# Click handlers
-def on_single_click(event):
-    item = tree.identify_row(event.y)
-    if not item:
-        return
-    update_info_bar(item)
-
-def on_double_click(event):
-    item = tree.identify_row(event.y)
-    col  = tree.identify_column(event.x)
-    if not item:
-        return
-    if col == "#6":
-        current_val = tree.item(item)["values"][5]
-        new_val = simpledialog.askstring(
-            "Switch Port", f"Enter switch port for {item}:",
-            initialvalue=current_val, parent=root)
-        if new_val is not None:
-            existing    = list(tree.item(item)["values"])
-            existing[5] = new_val
-            tree.item(item, values=existing)
-            for d in devices:
-                if d["ip"] == item:
-                    d["port"] = new_val
-        return
-    open_detail_popup(item)
-
-tree.bind("<Button-1>", on_single_click)
-tree.bind("<Double-1>", on_double_click)
-
-# Update loop
-def update_table():
+# ── Global update loop ────────────────────────────────────────────────────────
+def update_all_tables():
     with status_lock:
         current = dict(status)
 
-    online = offline = pending = new_count = 0
-    for ip, s in current.items():
-        if not tree.exists(ip):
-            continue
-        d_info  = next((d for d in devices if d["ip"] == ip), {})
-        is_new  = d_info.get("new_device", False)
-        alive   = s.get("alive")
+    total_online = total_offline = total_pending = total_new = 0
 
-        if is_new:
-            new_count += 1
-            tag   = "new"
-            label = "★ NEW"
-            if alive is True:   online  += 1
-            elif alive is False: offline += 1
-            else:                pending += 1
-        elif alive is None:
-            tag, label = "unknown", "◈ INIT"
-            pending += 1
-        elif alive:
-            tag, label = "green", "▲ ONLINE"
-            online += 1
-        else:
-            tag, label = "red", "▼ OFFLINE"
-            offline += 1
+    for sn, sd in subnet_data.items():
+        tree = sd["tree"]
+        for d in sd["devices"]:
+            ip     = d["ip"]
+            if not tree.exists(ip):
+                continue
+            s      = current.get(ip, {})
+            is_new = d.get("new_device", False)
+            alive  = s.get("alive")
 
-        existing = list(tree.item(ip)["values"])
-        tree.item(ip, values=(
-            label,
-            existing[1], existing[2], existing[3], existing[4], existing[5],
-            f"{s['latency']} ms"     if s.get("latency")     else "---",
-            f"{s['avg_latency']} ms" if s.get("avg_latency") else "---",
-            s.get("downtime", 0)
-        ), tags=(tag,))
+            if is_new:
+                total_new += 1
+                tag   = "new"
+                label = "★ NEW"
+                if alive is True:    total_online  += 1
+                elif alive is False: total_offline += 1
+                else:                total_pending += 1
+            elif alive is None:
+                tag, label = "unknown", "◈ INIT"
+                total_pending += 1
+            elif alive:
+                tag, label = "green", "▲ ONLINE"
+                total_online += 1
+            else:
+                tag, label = "red", "▼ OFFLINE"
+                total_offline += 1
 
-    online_var.set(f"▲ ONLINE:  {online}")
-    offline_var.set(f"▼ OFFLINE:  {offline}")
-    unknown_var.set(f"◈ PENDING:  {pending}")
-    new_var.set(f"★ NEW:  {new_count}" if new_count else "")
-    root.after(1000, update_table)
+            ex = list(tree.item(ip)["values"])
+            tree.item(ip, values=(
+                label,
+                ex[1], ex[2], ex[3], ex[4], ex[5],
+                f"{s['latency']} ms"     if s.get("latency")     else "---",
+                f"{s['avg_latency']} ms" if s.get("avg_latency") else "---",
+                s.get("downtime", 0)
+            ), tags=(tag,))
 
-# Bottom bar
+    online_var.set(f"▲ ONLINE:  {total_online}")
+    offline_var.set(f"▼ OFFLINE:  {total_offline}")
+    unknown_var.set(f"◈ PENDING:  {total_pending}")
+    new_var.set(f"★ NEW:  {total_new}" if total_new else "")
+    root.after(1000, update_all_tables)
+
+# ── Tray ──────────────────────────────────────────────────────────────────────
+tray_icon = {"instance": None}
+
+def make_tray_image():
+    from PIL import Image, ImageDraw
+    img  = Image.new("RGB", (64, 64), "#0a0a0f")
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([8, 14, 56, 50], outline="#ff00ff", width=2, fill="#1a1a2e")
+    for i in range(8):
+        x = 13 + i * 5
+        draw.rectangle([x, 20, x+3, 36], fill="#ffaa00")
+    draw.rectangle([20, 48, 44, 56], outline="#ff00ff", width=1, fill="#1a1a2e")
+    for rx, ry in [(4,4),(52,4),(4,52),(52,52)]:
+        draw.rectangle([rx, ry, rx+8, ry+8], fill="#00f5ff")
+    return img
+
+def setup_tray():
+    try:
+        import pystray
+        icon = pystray.Icon("NetPyWiz", make_tray_image(), "NetPyWiz Monitor",
+            pystray.Menu(
+                pystray.MenuItem("Show NetPyWiz",
+                    lambda i,it: root.after(0, root.deiconify), default=True),
+                pystray.MenuItem("Exit + Export",
+                    lambda i,it: root.after(0, on_close))
+            ))
+        tray_icon["instance"] = icon
+        def on_minimize(event):
+            if root.state() == "iconic":
+                root.withdraw()
+        root.bind("<Unmap>", on_minimize)
+        threading.Thread(target=icon.run, daemon=True).start()
+    except Exception as e:
+        print(f"Tray unavailable: {e}")
+
+# ── Bottom bar ────────────────────────────────────────────────────────────────
 tk.Frame(root, bg=MAGENTA, height=1).pack(fill="x")
 bottom = tk.Frame(root, bg=BG2, height=44)
 bottom.pack(fill="x", side="bottom")
@@ -704,7 +808,6 @@ status_bar = tk.Label(bottom,
 status_bar.pack(side="left", padx=16)
 
 def on_close():
-    # Save window geometry for next launch
     save_config({"window_size": root.geometry().split("+")[0]})
     if tray_icon["instance"]:
         tray_icon["instance"].stop()
@@ -712,10 +815,16 @@ def on_close():
         choice = ask_export_mode(root)
         if choice == "cancel":
             return
-        path = export_to_desktop(devices, subnet=subnet,
+        path = export_to_desktop(all_devices, subnet=subnets[0],
             append_to=session_file["path"] if choice == "append" else None)
     else:
-        path = export_to_desktop(devices, subnet=subnet)
+        # Export one CSV per subnet
+        paths = []
+        for sn, sd in subnet_data.items():
+            p = export_to_desktop(sd["devices"], subnet=sn)
+            paths.append(p)
+        path = ", ".join(paths)
+
     status_bar.config(text=f"◈ EXPORTED → {path}", fg=GREEN)
     root.after(1500, root.destroy)
 
@@ -728,70 +837,10 @@ tk.Button(bottom, text="⏹  END SESSION + EXPORT",
     activebackground=MAGENTA, activeforeground=BG, bd=0
 ).pack(side="right", padx=16, pady=8, ipadx=12)
 
-# ── Tray Icon ─────────────────────────────────────────────────────────────────
-tray_icon = {"instance": None}
-
-def make_tray_image():
-    from PIL import Image, ImageDraw
-    img  = Image.new("RGB", (64, 64), "#0a0a0f")
-    draw = ImageDraw.Draw(img)
-
-    # Ethernet port body
-    draw.rectangle([8, 14, 56, 50], outline="#ff00ff", width=2, fill="#1a1a2e")
-
-    # 8 gold contact pins
-    for i in range(8):
-        x = 13 + i * 5
-        draw.rectangle([x, 20, x+3, 36], fill="#ffaa00")
-
-    # Latch tab at bottom
-    draw.rectangle([20, 48, 44, 56], outline="#ff00ff", width=1, fill="#1a1a2e")
-
-    # Cyan corner accents
-    draw.rectangle([4,  4,  12, 12], fill="#00f5ff")
-    draw.rectangle([52, 4,  60, 12], fill="#00f5ff")
-    draw.rectangle([4,  52, 12, 60], fill="#00f5ff")
-    draw.rectangle([52, 52, 60, 60], fill="#00f5ff")
-
-    return img
-
-def setup_tray():
-    try:
-        import pystray
-
-        icon_img = make_tray_image()
-
-        def show_window(icon, item):
-            root.after(0, root.deiconify)
-            root.after(0, root.lift)
-
-        def exit_app(icon, item):
-            root.after(0, on_close)
-
-        menu = pystray.Menu(
-            pystray.MenuItem("Show NetPyWiz", show_window, default=True),
-            pystray.MenuItem("Exit + Export", exit_app)
-        )
-
-        icon = pystray.Icon("NetPyWiz", icon_img, "NetPyWiz Monitor", menu)
-        tray_icon["instance"] = icon
-
-        def on_minimize(event):
-            if root.state() == "iconic":
-                root.withdraw()
-                icon.notify("NetPyWiz", "Still monitoring in the background.")
-
-        root.bind("<Unmap>", on_minimize)
-        threading.Thread(target=icon.run, daemon=True).start()
-
-    except Exception as e:
-        print(f"Tray icon unavailable: {e}")
-
-# ── Launch ─────────────────────────────────────────────────────────────────────
-threading.Thread(target=start_monitor, args=(devices,), daemon=True).start()
-root.after(1000, update_table)
-root.after(1000, refresh_info_bar)
-root.after(500, setup_tray)
+# ── Launch ────────────────────────────────────────────────────────────────────
+threading.Thread(target=start_monitor, args=(all_devices,), daemon=True).start()
+root.after(1000, update_all_tables)
+root.after(1000, refresh_all_info_bars)
+root.after(500,  setup_tray)
 root.deiconify()
-
 root.mainloop()
