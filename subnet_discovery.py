@@ -34,10 +34,14 @@ def best_font(size=10, bold=False):
 
 def ping_host(host: str) -> bool:
     try:
-        result = subprocess.run(
-            ["ping", "-c", "1", "-W", "1", host],
-            capture_output=True, timeout=2
-        )
+        import platform
+        if platform.system() == "Windows":
+            # Windows ping: -n count, -w timeout_ms
+            cmd = ["ping", "-n", "1", "-w", "1000", host]
+        else:
+            # Linux/Mac ping: -c count, -W timeout_seconds
+            cmd = ["ping", "-c", "1", "-W", "1", host]
+        result = subprocess.run(cmd, capture_output=True, timeout=3)
         return result.returncode == 0
     except Exception:
         return False

@@ -1,14 +1,34 @@
+import os
 from scapy.all import ARP, Ether, srp
 import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Vendor lookup using system OUI database — no async issues
+def find_oui_file() -> str:
+    """Find OUI database — works on Linux and Windows."""
+    import sys
+    candidates = [
+        "/usr/share/ieee-data/oui.txt",
+        "/usr/share/misc/oui.txt",
+        # PyInstaller bundle path
+        os.path.join(getattr(sys, "_MEIPASS", ""), "oui.txt"),
+        # Same directory as script
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "oui.txt"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return ""
+
 def get_vendor(mac: str) -> str:
     try:
         mac_clean = mac.upper().replace(":", "-")[:8]
+        oui_path  = find_oui_file()
+        if not oui_path:
+            return "Unknown"
         result = subprocess.run(
-            ["grep", "-i", mac_clean, "/usr/share/ieee-data/oui.txt"],
+            ["grep", "-i", mac_clean, oui_path],
             capture_output=True, text=True, timeout=1
         )
         if result.stdout:

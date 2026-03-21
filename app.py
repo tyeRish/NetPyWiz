@@ -1,5 +1,30 @@
 import os
+import platform
 import tkinter as tk
+
+def check_admin():
+    """Ensure the app is running with admin/root privileges."""
+    try:
+        if platform.system() == "Windows":
+            import ctypes
+            if not ctypes.windll.shell32.IsUserAnAdmin():
+                # Re-launch with UAC elevation
+                import sys
+                ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas",
+                    sys.executable,
+                    " ".join(sys.argv),
+                    None, 1
+                )
+                sys.exit()
+        else:
+            if os.geteuid() != 0:
+                print("NetPyWiz requires root. Run with: sudo NetPyWiz")
+                import sys; sys.exit(1)
+    except Exception:
+        pass
+
+check_admin()
 from tkinter import ttk, simpledialog
 import threading
 import time

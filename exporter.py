@@ -3,23 +3,35 @@ import os
 from datetime import datetime
 from monitor import status, status_lock
 
+import platform
+
 def get_real_user():
-    return os.environ.get("SUDO_USER") or os.environ.get("USER")
+    # On Linux with sudo, SUDO_USER has the real username
+    # On Windows, use USERNAME env var
+    return (os.environ.get("SUDO_USER") or
+            os.environ.get("USER") or
+            os.environ.get("USERNAME") or
+            "user")
 
 def get_desktop_path():
-    real_user = get_real_user()
-    desktop   = f"/home/{real_user}/Desktop"
+    if platform.system() == "Windows":
+        # Windows Desktop path
+        desktop = os.path.join(os.environ.get("USERPROFILE", "C:\\Users\\user"), "Desktop")
+    else:
+        real_user = get_real_user()
+        desktop   = f"/home/{real_user}/Desktop"
     os.makedirs(desktop, exist_ok=True)
     return desktop
 
 def fix_ownership(path: str):
-    """Recursively set ownership to the real user, not root."""
+    """Fix ownership on Linux only — not needed on Windows."""
+    if platform.system() == "Windows":
+        return
     try:
         import pwd
         real_user = get_real_user()
         pw        = pwd.getpwnam(real_user)
         uid, gid  = pw.pw_uid, pw.pw_gid
-        # Walk directory or fix single file
         if os.path.isdir(path):
             for root_dir, dirs, files in os.walk(path):
                 os.chown(root_dir, uid, gid)
