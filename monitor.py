@@ -9,10 +9,36 @@ status_lock = threading.Lock()
 latency_history = {}
 history_lock = threading.Lock()
 
+def get_iface_for_ip(ip: str):
+    """Find the right interface for a given IP on Windows."""
+    import platform
+    if platform.system() != "Windows":
+        return None
+    try:
+        import socket
+        from scapy.all import get_if_list, get_if_addr
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect((ip, 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        for iface in get_if_list():
+            try:
+                if get_if_addr(iface) == local_ip:
+                    return iface
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
 def ping_device(ip: str) -> tuple[bool, float | None]:
     try:
         start = time.time()
-        reply = sr1(IP(dst=ip)/ICMP(), timeout=1, verbose=0)
+        iface = get_iface_for_ip(ip)
+        if iface:
+            reply = sr1(IP(dst=ip)/ICMP(), timeout=1, verbose=0, iface=iface)
+        else:
+            reply = sr1(IP(dst=ip)/ICMP(), timeout=1, verbose=0)
         if reply is not None:
             rtt = (time.time() - start) * 1000
             return True, round(rtt, 2)
