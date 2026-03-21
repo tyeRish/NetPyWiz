@@ -34,6 +34,7 @@ from sparkline import draw_sparkline
 from nmap_scan import run_nmap
 from startup import (ask_subnets, run_splash_scan, ask_rescan,
                      ask_export_mode, best_font)
+from wol import send_magic_packet, get_broadcast
 from config import load as load_config, save as save_config
 from cve_lookup import lookup_cves, severity_color
 from report_generator import generate_device_report, save_device_report
@@ -334,11 +335,107 @@ def build_tab(sn):
         show="headings", selectmode="browse")
     sd["tree"] = tree
 
+    # ── Column sorting ───────────────────────────────────────────────────────
+    sort_state = []  # list of (col, reverse) — supports stacked sorts
+
+    def sort_by(col, tree=tree, shift=False):
+        """
+        Click = sort by col (clears other sorts)
+        Shift+click = add col as secondary sort
+        Clicking same col again = reverse direction
+        """
+        nonlocal sort_state
+
+        # Check if this col already in sort
+        existing = [(c, r) for c, r in sort_state if c == col]
+
+        if shift:
+            if existing:
+                # Reverse existing
+                sort_state = [(c, not r) if c == col else (c, r)
+                              for c, r in sort_state]
+            else:
+                sort_state.append((col, False))
+        else:
+            if existing and len(sort_state) == 1:
+                # Same col, single sort — reverse
+                sort_state = [(col, not existing[0][1])]
+            else:
+                sort_state = [(col, False)]
+
+        apply_sort(tree)
+        update_sort_headers(tree)
+
+    def apply_sort(tree):
+        """Sorts all rows in the tree by current sort_state."""
+        items = [(tree.item(k)["values"], k) for k in tree.get_children("")]
+        if not items:
+            return
+
+        col_order = list(col_defs.keys())
+
+        def make_sort_key(col, val):
+            """Returns a properly typed sort key for a column value."""
+            if col in ("latency", "avg_latency", "downtime"):
+                try:
+                    return float(str(val).replace(" ms","").replace("---","999999"))
+                except Exception:
+                    return 999999
+            elif col == "ip":
+                # Convert IP to tuple of ints for proper numeric sort
+                # e.g. "10.55.0.10" -> (10, 55, 0, 10)
+                try:
+                    return tuple(int(p) for p in str(val).split("."))
+                except Exception:
+                    return (999, 999, 999, 999)
+            else:
+                return str(val).lower()
+
+        # Stable multi-column sort — apply in reverse order of priority
+        for col, reverse in reversed(sort_state):
+            idx = col_order.index(col)
+            items.sort(
+                key=lambda item, c=col, i=idx: make_sort_key(c, item[0][i]),
+                reverse=reverse
+            )
+
+        for i, (_, k) in enumerate(items):
+            tree.move(k, "", i)
+
+    def update_sort_headers(tree):
+        """Update column headers to show sort arrows."""
+        sort_cols = {c: r for c, r in sort_state}
+        for col, (label, width) in col_defs.items():
+            if col in sort_cols:
+                arrow = " ▼" if sort_cols[col] else " ▲"
+                tree.heading(col, text=label + arrow)
+            else:
+                tree.heading(col, text=label)
+
     for col, (label, width) in col_defs.items():
-        tree.heading(col, text=label)
+        tree.heading(col, text=label,
+            command=lambda c=col: sort_by(
+                c, tree=tree,
+                shift=bool(tree.tk.call("info", "exists", ".") and
+                           __import__("tkinter").EventType)))
         tree.column(col, width=width,
             anchor="center" if col in
                 ("status","port","latency","avg_latency","downtime") else "w")
+
+    # Bind shift+click on headers separately
+    def on_header_click(event, tree=tree):
+        region = tree.identify_region(event.x, event.y)
+        if region != "heading":
+            return
+        col = tree.identify_column(event.x)
+        # Convert #1, #2 etc to col name
+        col_names = list(col_defs.keys())
+        idx = int(col.replace("#","")) - 1
+        if 0 <= idx < len(col_names):
+            shift = (event.state & 0x1) != 0  # check shift key state
+            sort_by(col_names[idx], tree=tree, shift=shift)
+
+    tree.bind("<Button-1>", on_header_click)
 
     tree.tag_configure("green",   background=BG3, foreground=GREEN)
     tree.tag_configure("red",     background=BG3, foreground=RED)
@@ -515,6 +612,26 @@ def build_tab(sn):
         col  = _sd["tree"].identify_column(event.x)
         if not item:
             return
+
+        # Col #4 = hostname — edit alias
+        if col == "#4":
+            d_info   = next((d for d in _sd["devices"] if d["ip"] == item), {})
+            cur_alias = d_info.get("alias", "") or d_info.get("hostname", "")
+            new_alias = simpledialog.askstring(
+                "Device Alias",
+                "Set friendly name for " + item + " (leave blank to use hostname)",
+                initialvalue=cur_alias, parent=root)
+            if new_alias is not None:
+                for d in _sd["devices"]:
+                    if d["ip"] == item:
+                        d["alias"] = new_alias.strip()
+                # Update display — show alias if set, else hostname
+                ex    = list(_sd["tree"].item(item)["values"])
+                ex[3] = new_alias.strip() if new_alias.strip() else d_info.get("hostname","")
+                _sd["tree"].item(item, values=ex)
+            return
+
+        # Col #6 = switch port
         if col == "#6":
             cur = _sd["tree"].item(item)["values"][5]
             new_val = simpledialog.askstring(
@@ -528,6 +645,7 @@ def build_tab(sn):
                     if d["ip"] == item:
                         d["port"] = new_val
             return
+
         open_detail_popup(item)
 
     tree.bind("<Button-1>", on_single_click)
@@ -647,6 +765,34 @@ def open_detail_popup(ip):
             font=best_font(8)).pack(side="left")
         tk.Label(row, text=val, bg=BG, fg=col,
             font=best_font(8, True)).pack(side="left")
+
+    # Wake on LAN button — only useful when offline
+    wol_frame = tk.Frame(left, bg=BG)
+    wol_frame.pack(fill="x", pady=(8,4))
+
+    wol_status = tk.StringVar(value="")
+    tk.Label(wol_frame, textvariable=wol_status,
+        bg=BG, fg=GREEN, font=best_font(8)).pack(side="right")
+
+    def do_wol():
+        mac       = d_info.get("mac", "")
+        broadcast = get_broadcast(ip)
+        success   = send_magic_packet(mac, broadcast)
+        if success:
+            wol_status.set("◈ MAGIC PACKET SENT")
+            wol_btn.config(fg=GREEN)
+        else:
+            wol_status.set("⚠ SEND FAILED")
+            wol_btn.config(fg=RED)
+
+    wol_btn = tk.Button(wol_frame,
+        text="⚡  WAKE ON LAN",
+        command=do_wol,
+        bg=BG3, fg=AMBER,
+        font=best_font(9, True),
+        relief="flat", cursor="hand2",
+        activebackground=AMBER, activeforeground=BG, bd=0)
+    wol_btn.pack(side="left", ipadx=12, ipady=4)
 
     tk.Label(left, text="NOTES:", bg=BG, fg=DIM,
         font=best_font(8)).pack(anchor="w", pady=(12,2))
