@@ -20,7 +20,19 @@ AMBER       = "#ffaa00"
 DIM         = "#444466"
 WHITE       = "#e0e0ff"
 
-# ── Notes storage — persists for session ──────────────────────────────────────
+# Detect best available font
+def best_font(size=10, bold=False):
+    weight = "bold" if bold else "normal"
+    try:
+        import tkinter.font as tkfont
+        available = tkfont.families()
+        for name in ["JetBrains Mono", "Fira Mono", "DejaVu Sans Mono", "Courier New"]:
+            if name in available:
+                return (name, size, weight)
+    except Exception:
+        pass
+    return ("Courier New", size, weight)
+
 device_notes = {}
 
 # ── Subnet Dialog ─────────────────────────────────────────────────────────────
@@ -37,17 +49,17 @@ def ask_subnet():
     result = {"subnet": None}
 
     tk.Label(dialog, text="▓▓ NETPYWIZ // NETWORK MONITOR ▓▓",
-        bg=BG, fg=MAGENTA, font=("Courier New", 13, "bold")).pack(pady=(28,4))
+        bg=BG, fg=MAGENTA, font=best_font(13, True)).pack(pady=(28,4))
     tk.Label(dialog, text="INITIALIZE SUBNET SCAN",
-        bg=BG, fg=CYAN, font=("Courier New", 9)).pack()
+        bg=BG, fg=CYAN, font=best_font(9)).pack()
     tk.Frame(dialog, bg=MAGENTA, height=1).pack(fill="x", padx=30, pady=14)
     tk.Label(dialog, text="TARGET SUBNET  (CIDR notation)",
-        bg=BG, fg=DIM, font=("Courier New", 8)).pack()
+        bg=BG, fg=DIM, font=best_font(8)).pack()
 
     entry_var = tk.StringVar(value="192.168.1.0/24")
     entry = tk.Entry(dialog, textvariable=entry_var,
         bg=BG3, fg=CYAN, insertbackground=CYAN, selectbackground=MAGENTA,
-        font=("Courier New", 13), relief="flat", justify="center", bd=0)
+        font=best_font(13), relief="flat", justify="center", bd=0)
     entry.pack(padx=50, pady=10, ipady=8, fill="x")
     entry.select_range(0, "end")
     entry.focus()
@@ -59,9 +71,8 @@ def ask_subnet():
 
     entry.bind("<Return>",   confirm)
     entry.bind("<KP_Enter>", confirm)
-
     tk.Button(dialog, text="► INITIATE SCAN", command=confirm,
-        bg=MAGENTA_DIM, fg=BG, font=("Courier New", 11, "bold"),
+        bg=MAGENTA_DIM, fg=BG, font=best_font(11, True),
         relief="flat", cursor="hand2",
         activebackground=MAGENTA, activeforeground=BG, bd=0
     ).pack(pady=16, ipadx=20, ipady=6)
@@ -85,16 +96,15 @@ y = (splash.winfo_screenheight() // 2) - 80
 splash.geometry(f"+{x}+{y}")
 
 tk.Label(splash, text="▓▓ NETPYWIZ ▓▓",
-    bg=BG, fg=MAGENTA, font=("Courier New", 14, "bold")).pack(pady=(24,4))
+    bg=BG, fg=MAGENTA, font=best_font(14, True)).pack(pady=(24,4))
 tk.Label(splash, text=f"SCANNING  {subnet} ...",
-    bg=BG, fg=CYAN, font=("Courier New", 10)).pack()
+    bg=BG, fg=CYAN, font=best_font(10)).pack()
 tk.Label(splash, text="THIS MAY TAKE UP TO 30 SECONDS",
-    bg=BG, fg=DIM, font=("Courier New", 8)).pack(pady=4)
+    bg=BG, fg=DIM, font=best_font(8)).pack(pady=4)
 
-dot_var  = tk.StringVar(value="")
-dot_label= tk.Label(splash, textvariable=dot_var, bg=BG, fg=MAGENTA,
-    font=("Courier New", 12))
-dot_label.pack()
+dot_var = tk.StringVar(value="")
+tk.Label(splash, textvariable=dot_var, bg=BG, fg=MAGENTA,
+    font=best_font(12)).pack()
 
 devices   = []
 scan_done = threading.Event()
@@ -103,7 +113,8 @@ def run_scan():
     global devices
     devices = scan_subnet(subnet)
     for d in devices:
-        d["port"] = ""
+        d["port"]  = ""
+        d["notes"] = ""
     scan_done.set()
 
 def animate_dots():
@@ -136,24 +147,42 @@ if not devices:
 root = tk.Tk()
 root.title("NetPyWiz — Network Monitor")
 root.configure(bg=BG)
-root.geometry("1280x720")
-root.minsize(900, 500)
+root.geometry("1280x760")
+root.minsize(900, 600)
 
-# Header
+# ── Header ────────────────────────────────────────────────────────────────────
 header = tk.Frame(root, bg=BG2, height=56)
 header.pack(fill="x")
 header.pack_propagate(False)
 
-tk.Label(header, text="▓▓ NETPYWIZ",
-    bg=BG2, fg=MAGENTA, font=("Courier New", 18, "bold")).pack(side="left", padx=20, pady=10)
+# Ethernet port logo drawn on canvas
+logo_canvas = tk.Canvas(header, width=38, height=38,
+    bg=BG2, highlightthickness=0)
+logo_canvas.pack(side="left", padx=(14,4), pady=8)
+
+def draw_eth_logo(c):
+    # Outer rectangle — ethernet port body
+    c.create_rectangle(4, 8, 34, 32, outline=MAGENTA, width=2, fill=BG3)
+    # Gold contact pins inside
+    pin_colors = [AMBER, AMBER, AMBER, AMBER, AMBER, AMBER, AMBER, AMBER]
+    for i, col in enumerate(pin_colors):
+        x = 7 + i * 3.5
+        c.create_rectangle(x, 12, x+2, 24, fill=col, outline="")
+    # Latch tab at bottom
+    c.create_rectangle(11, 30, 27, 35, outline=MAGENTA, width=1, fill=BG3)
+
+draw_eth_logo(logo_canvas)
+
+tk.Label(header, text="NETPYWIZ",
+    bg=BG2, fg=MAGENTA, font=best_font(18, True)).pack(side="left", pady=10)
 tk.Label(header, text="// NETWORK MONITOR",
-    bg=BG2, fg=CYAN, font=("Courier New", 12)).pack(side="left", pady=10)
+    bg=BG2, fg=CYAN, font=best_font(12)).pack(side="left", padx=8, pady=10)
 
 clock_var = tk.StringVar()
 tk.Label(header, textvariable=clock_var,
-    bg=BG2, fg=DIM, font=("Courier New", 10)).pack(side="right", padx=20)
+    bg=BG2, fg=DIM, font=best_font(10)).pack(side="right", padx=20)
 tk.Label(header, text=f"◈  {subnet}  ◈  {len(devices)} DEVICES",
-    bg=BG2, fg=AMBER, font=("Courier New", 9)).pack(side="right", padx=10)
+    bg=BG2, fg=AMBER, font=best_font(9)).pack(side="right", padx=10)
 
 def tick():
     clock_var.set(time.strftime("◈  %Y-%m-%d  %H:%M:%S"))
@@ -162,21 +191,21 @@ tick()
 
 tk.Frame(root, bg=MAGENTA, height=2).pack(fill="x")
 
-# Stats bar
+# ── Stats bar ─────────────────────────────────────────────────────────────────
 stats_frame = tk.Frame(root, bg=BG2)
 stats_frame.pack(fill="x")
 
-online_var  = tk.StringVar(value="● ONLINE:  0")
-offline_var = tk.StringVar(value="● OFFLINE:  0")
+online_var  = tk.StringVar(value="▲ ONLINE:  0")
+offline_var = tk.StringVar(value="▼ OFFLINE:  0")
 unknown_var = tk.StringVar(value="◈ PENDING:  0")
 
 for var, color in [(online_var, GREEN), (offline_var, RED), (unknown_var, DIM)]:
     tk.Label(stats_frame, textvariable=var, bg=BG2, fg=color,
-        font=("Courier New", 9, "bold")).pack(side="left", padx=20, pady=4)
+        font=best_font(9, True)).pack(side="left", padx=20, pady=4)
 
 tk.Frame(root, bg=CYAN, height=1).pack(fill="x")
 
-# Table
+# ── Table ─────────────────────────────────────────────────────────────────────
 table_frame = tk.Frame(root, bg=BG)
 table_frame.pack(fill="both", expand=True)
 
@@ -184,12 +213,12 @@ style = ttk.Style()
 style.theme_use("clam")
 style.configure("Treeview",
     background=BG3, foreground=WHITE, fieldbackground=BG3,
-    rowheight=30, font=("Courier New", 10), borderwidth=0)
+    rowheight=30, font=best_font(10), borderwidth=0)
 style.configure("Treeview.Heading",
     background=BG2, foreground=CYAN,
-    font=("Courier New", 9, "bold"), relief="flat", borderwidth=0)
+    font=best_font(9, True), relief="flat", borderwidth=0)
 style.map("Treeview",
-    background=[("selected", "#2a2a4a")],
+    background=[("selected", "#16162a")],
     foreground=[("selected", CYAN)])
 style.layout("Treeview", [('Treeview.treearea', {'sticky': 'nswe'})])
 
@@ -197,14 +226,14 @@ columns = ("status","ip","mac","hostname","vendor","port","latency","avg_latency
 tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
 
 col_defs = {
-    "status":      ("STATUS",      80),
+    "status":      ("STATUS",      90),
     "ip":          ("IP ADDRESS", 130),
     "mac":         ("MAC ADDRESS",155),
     "hostname":    ("HOSTNAME",   200),
     "vendor":      ("VENDOR",     160),
     "port":        ("SW PORT",    100),
-    "latency":     ("LAT ms",      80),
-    "avg_latency": ("AVG ms",      80),
+    "latency":     ("LAT ms",      90),
+    "avg_latency": ("AVG ms",      90),
     "downtime":    ("DOWN s",      80),
 }
 
@@ -213,10 +242,13 @@ for col, (label, width) in col_defs.items():
     tree.column(col, width=width,
         anchor="center" if col in ("status","port","latency","avg_latency","downtime") else "w")
 
-tree.tag_configure("green",   background="#001a0f", foreground=GREEN)
-tree.tag_configure("red",     background="#1a000a", foreground=RED)
-tree.tag_configure("unknown", background=BG3,       foreground=DIM)
-tree.tag_configure("inline",  background="#0f0f2a", foreground=DIM)
+# Font-only color tags — no background highlight
+tree.tag_configure("green",   background=BG3, foreground=GREEN)
+tree.tag_configure("red",     background=BG3, foreground=RED)
+tree.tag_configure("unknown", background=BG3, foreground=DIM)
+tree.tag_configure("selected_green", background="#16162a", foreground=GREEN)
+tree.tag_configure("selected_red",   background="#16162a", foreground=RED)
+tree.tag_configure("selected_unk",   background="#16162a", foreground=DIM)
 
 scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
 tree.configure(yscrollcommand=scrollbar.set)
@@ -225,150 +257,109 @@ scrollbar.pack(side="right", fill="y")
 
 for d in devices:
     tree.insert("", "end", iid=d["ip"], values=(
-        "INIT...", d["ip"], d["mac"], d["hostname"],
+        "◈ INIT", d["ip"], d["mac"], d["hostname"],
         d["vendor"], "", "", "", "0"
     ), tags=("unknown",))
 
-# ── Inline expansion ──────────────────────────────────────────────────────────
-# We insert a fake row below the selected device that acts as an info panel.
-# It contains a mini sparkline canvas embedded via a window.
-expanded_ip     = None
-inline_canvas   = None
-inline_frame_id = None
-inline_iid      = "__inline_panel__"
+# ── Info bar — single click populates this ────────────────────────────────────
+tk.Frame(root, bg=MAGENTA, height=1).pack(fill="x")
 
-def collapse_inline():
-    global expanded_ip, inline_canvas, inline_frame_id
-    if tree.exists(inline_iid):
-        tree.delete(inline_iid)
-    expanded_ip     = None
-    inline_canvas   = None
-    inline_frame_id = None
+info_bar = tk.Frame(root, bg=BG2, height=90)
+info_bar.pack(fill="x")
+info_bar.pack_propagate(False)
 
-def expand_inline(ip: str):
-    global expanded_ip, inline_canvas
+info_ip_var     = tk.StringVar(value="")
+info_status_var = tk.StringVar(value="")
+info_lat_var    = tk.StringVar(value="")
+info_avg_var    = tk.StringVar(value="")
+info_down_var   = tk.StringVar(value="")
+info_vendor_var = tk.StringVar(value="")
+info_mac_var    = tk.StringVar(value="")
 
-    # Collapse if already open
-    if expanded_ip == ip:
-        collapse_inline()
-        return
+# Left block — IP + status
+left_info = tk.Frame(info_bar, bg=BG2)
+left_info.pack(side="left", padx=16, pady=8)
 
-    collapse_inline()
-    expanded_ip = ip
+tk.Label(left_info, textvariable=info_ip_var,
+    bg=BG2, fg=MAGENTA, font=best_font(14, True)).pack(anchor="w")
+tk.Label(left_info, textvariable=info_status_var,
+    bg=BG2, fg=GREEN, font=best_font(9)).pack(anchor="w")
 
-    # Insert fake row directly below the selected device
-    try:
-        idx = tree.index(ip)
-        tree.insert("", idx + 1, iid=inline_iid,
-            values=("", "", "", "", "", "", "", "", ""),
-            tags=("inline",))
-    except Exception:
-        return
+tk.Frame(info_bar, bg=DIM, width=1).pack(side="left", fill="y", pady=8)
 
-    # Build a frame to embed in the fake row
-    frame = tk.Frame(tree, bg="#0f0f2a", pady=6)
+# Mid block — latency stats
+mid_info = tk.Frame(info_bar, bg=BG2)
+mid_info.pack(side="left", padx=16, pady=8)
 
-    # Mini sparkline
-    spark_canvas = tk.Canvas(frame, width=220, height=60,
-        bg="#0f0f2a", highlightthickness=0)
-    spark_canvas.pack(side="left", padx=(12,8))
-    inline_canvas = spark_canvas
+for label, var, color in [
+    ("LATENCY", info_lat_var, CYAN),
+    ("AVG",     info_avg_var, CYAN),
+    ("DOWNTIME",info_down_var, RED),
+]:
+    row = tk.Frame(mid_info, bg=BG2)
+    row.pack(anchor="w")
+    tk.Label(row, text=f"{label:<10}", bg=BG2, fg=DIM,
+        font=best_font(8)).pack(side="left")
+    tk.Label(row, textvariable=var, bg=BG2, fg=color,
+        font=best_font(8, True)).pack(side="left")
 
-    # Quick stats
+tk.Frame(info_bar, bg=DIM, width=1).pack(side="left", fill="y", pady=8)
+
+# Right block — device info
+right_info = tk.Frame(info_bar, bg=BG2)
+right_info.pack(side="left", padx=16, pady=8)
+
+for label, var in [("VENDOR", info_vendor_var), ("MAC", info_mac_var)]:
+    row = tk.Frame(right_info, bg=BG2)
+    row.pack(anchor="w")
+    tk.Label(row, text=f"{label:<8}", bg=BG2, fg=DIM,
+        font=best_font(8)).pack(side="left")
+    tk.Label(row, textvariable=var, bg=BG2, fg=WHITE,
+        font=best_font(8)).pack(side="left")
+
+# Mini sparkline in info bar
+spark_mini = tk.Canvas(info_bar, width=200, height=70,
+    bg=BG2, highlightthickness=0)
+spark_mini.pack(side="right", padx=16, pady=8)
+
+tk.Label(info_bar, text="◈ CLICK ROW TO INSPECT  //  DOUBLE-CLICK FOR FULL DETAIL",
+    bg=BG2, fg=DIM, font=best_font(7)).pack(side="right", padx=8)
+
+selected_ip = {"ip": None}
+
+def update_info_bar(ip):
+    selected_ip["ip"] = ip
+    d_info = next((d for d in devices if d["ip"] == ip), {})
     with status_lock:
         s = dict(status.get(ip, {}))
-
-    info_frame = tk.Frame(frame, bg="#0f0f2a")
-    info_frame.pack(side="left", padx=8)
-
-    alive = s.get("alive")
-    status_str = "● ONLINE" if alive else "● OFFLINE" if alive is False else "◈ INIT"
-    status_col = GREEN if alive else RED if alive is False else DIM
-
-    tk.Label(info_frame, text=status_str, bg="#0f0f2a", fg=status_col,
-        font=("Courier New", 9, "bold")).grid(row=0, column=0, sticky="w")
-    tk.Label(info_frame, text=f"LATENCY:  {s.get('latency') or '---'} ms",
-        bg="#0f0f2a", fg=CYAN, font=("Courier New", 8)).grid(row=1, column=0, sticky="w")
-    tk.Label(info_frame, text=f"AVG:      {s.get('avg_latency') or '---'} ms",
-        bg="#0f0f2a", fg=CYAN, font=("Courier New", 8)).grid(row=2, column=0, sticky="w")
-    tk.Label(info_frame, text=f"DOWNTIME: {s.get('downtime', 0)}s",
-        bg="#0f0f2a", fg=RED, font=("Courier New", 8)).grid(row=3, column=0, sticky="w")
-
-    # Notes field
-    notes_frame = tk.Frame(frame, bg="#0f0f2a")
-    notes_frame.pack(side="left", padx=16)
-    tk.Label(notes_frame, text="NOTES:", bg="#0f0f2a", fg=DIM,
-        font=("Courier New", 7)).pack(anchor="w")
-    notes_text = tk.Text(notes_frame, width=30, height=3,
-        bg=BG3, fg=WHITE, insertbackground=CYAN,
-        font=("Courier New", 8), relief="flat", bd=0)
-    notes_text.pack()
-    notes_text.insert("1.0", device_notes.get(ip, ""))
-
-    def save_notes(event=None):
-        device_notes[ip] = notes_text.get("1.0", "end-1c")
-        for d in devices:
-            if d["ip"] == ip:
-                d["notes"] = device_notes[ip]
-
-    notes_text.bind("<KeyRelease>", save_notes)
-
-    tk.Label(notes_frame, text="DOUBLE-CLICK ROW FOR FULL DETAIL",
-        bg="#0f0f2a", fg=DIM, font=("Courier New", 7)).pack(anchor="w", pady=(4,0))
-
-    # Embed frame into the tree row
-    tree.item(inline_iid, values=("", "", "", "", "", "", "", "", ""))
-    tree.set_row_height = lambda: None
-    style.configure("Treeview", rowheight=30)
-    frame_id = tree.tag_configure("inline")
-    tree_frame_window = tree.insert
-    canvas_id = tree.item(inline_iid)
-
-    # Use a window item in the treeview
-    frame.update_idletasks()
-    tree.tag_configure("inline", background="#0f0f2a")
-
-    # Draw initial sparkline
     with history_lock:
         samples = list(latency_history.get(ip, []))
-    draw_sparkline(spark_canvas, samples, 220, 60, mini=True)
 
-    # Embed the frame as a Treeview window
-    tree_window = tk.Canvas(tree, width=tree.winfo_width(), height=80,
-        bg="#0f0f2a", highlightthickness=0)
-    frame.pack(in_=tree_window, fill="both", expand=True)
-    tree.item(inline_iid, tags=("inline",))
+    alive = s.get("alive")
+    info_ip_var.set(ip)
+    info_status_var.set("▲ ONLINE" if alive else "▼ OFFLINE" if alive is False else "◈ INIT")
+    info_lat_var.set(f"{s.get('latency') or '---'} ms")
+    info_avg_var.set(f"{s.get('avg_latency') or '---'} ms")
+    info_down_var.set(f"{s.get('downtime', 0)}s")
+    info_vendor_var.set(d_info.get("vendor", ""))
+    info_mac_var.set(d_info.get("mac", ""))
+    draw_sparkline(spark_mini, samples, 200, 70, mini=True)
 
-    global inline_frame_id
-    inline_frame_id = tree.tag_configure
+def refresh_info_bar():
+    if selected_ip["ip"]:
+        update_info_bar(selected_ip["ip"])
+    root.after(1000, refresh_info_bar)
 
-    # Attach frame to row using place — positioned under selected row
-    tree.update_idletasks()
-    bbox = tree.bbox(ip)
-    if bbox:
-        tree_window.place(x=0, y=bbox[1] + bbox[3], width=tree.winfo_width(), height=80)
-    else:
-        tree_window.place(x=0, y=0, width=tree.winfo_width(), height=80)
-
-    # Update sparkline every second
-    def refresh_spark():
-        if not tree.exists(inline_iid) or expanded_ip != ip:
-            return
-        with history_lock:
-            s2 = list(latency_history.get(ip, []))
-        draw_sparkline(spark_canvas, s2, 220, 60, mini=True)
-        root.after(1000, refresh_spark)
-
-    root.after(1000, refresh_spark)
+root.after(1000, refresh_info_bar)
 
 # ── Full detail popup ─────────────────────────────────────────────────────────
-def open_detail_popup(ip: str):
+def open_detail_popup(ip):
     d_info = next((d for d in devices if d["ip"] == ip), {})
 
     popup = tk.Toplevel(root)
     popup.title(f"NetPyWiz  //  {ip}")
     popup.configure(bg=BG)
-    popup.geometry("720x580")
+    popup.geometry("1000x640")
     popup.resizable(True, True)
 
     # Header
@@ -376,14 +367,13 @@ def open_detail_popup(ip: str):
     hdr.pack(fill="x")
     hdr.pack_propagate(False)
     tk.Label(hdr, text=f"▓▓  {ip}",
-        bg=BG2, fg=MAGENTA, font=("Courier New", 14, "bold")).pack(side="left", padx=16, pady=8)
+        bg=BG2, fg=MAGENTA, font=best_font(14, True)).pack(side="left", padx=16, pady=8)
     tk.Label(hdr, text=d_info.get("hostname",""),
-        bg=BG2, fg=CYAN, font=("Courier New", 10)).pack(side="left", pady=8)
+        bg=BG2, fg=CYAN, font=best_font(10)).pack(side="left", pady=8)
     tk.Label(hdr, text=d_info.get("vendor",""),
-        bg=BG2, fg=DIM, font=("Courier New", 9)).pack(side="right", padx=16, pady=8)
+        bg=BG2, fg=DIM, font=best_font(9)).pack(side="right", padx=16, pady=8)
     tk.Frame(popup, bg=MAGENTA, height=1).pack(fill="x")
 
-    # Body — two columns
     body = tk.Frame(popup, bg=BG)
     body.pack(fill="both", expand=True, padx=16, pady=12)
 
@@ -392,9 +382,9 @@ def open_detail_popup(ip: str):
     left.pack(side="left",  fill="both", expand=True)
     right.pack(side="right", fill="both", expand=True, padx=(16,0))
 
-    # ── Left: sparkline + stats ───────────────────────────────────────────────
+    # Sparkline
     tk.Label(left, text="LATENCY HISTORY  (last 60s)",
-        bg=BG, fg=CYAN, font=("Courier New", 8, "bold")).pack(anchor="w")
+        bg=BG, fg=CYAN, font=best_font(8, True)).pack(anchor="w")
 
     spark = tk.Canvas(left, width=320, height=140,
         bg=BG3, highlightthickness=1, highlightbackground=MAGENTA_DIM)
@@ -404,145 +394,167 @@ def open_detail_popup(ip: str):
         samples = list(latency_history.get(ip, []))
     draw_sparkline(spark, samples, 320, 140, mini=False)
 
-    # Stats grid
+    # Live refresh sparkline every second
+    def refresh_spark():
+        if not popup.winfo_exists():
+            return
+        with history_lock:
+            s2 = list(latency_history.get(ip, []))
+        draw_sparkline(spark, s2, 320, 140, mini=False)
+        popup.after(1000, refresh_spark)
+
+    popup.after(1000, refresh_spark)
+
+    # Stats
     with status_lock:
         s = dict(status.get(ip, {}))
 
-    total   = s.get("total_pings",  0)
-    online  = s.get("online_pings", 0)
-    uptime  = round((online / total * 100), 1) if total > 0 else 0
+    total  = s.get("total_pings",  0)
+    online = s.get("online_pings", 0)
+    uptime = round((online / total * 100), 1) if total > 0 else 0
 
+    alive = s.get("alive")
     stats = [
-        ("STATUS",       "● ONLINE" if s.get("alive") else "● OFFLINE", GREEN if s.get("alive") else RED),
-        ("FIRST SEEN",   s.get("first_seen", "---"),  WHITE),
-        ("LATENCY",      f"{s.get('latency') or '---'} ms", CYAN),
-        ("AVG LATENCY",  f"{s.get('avg_latency') or '---'} ms", CYAN),
-        ("DOWNTIME",     f"{s.get('downtime', 0)}s",  RED),
-        ("UPTIME",       f"{uptime}%",                GREEN),
-        ("MAC",          d_info.get("mac","---"),     WHITE),
-        ("SW PORT",      d_info.get("port","---"),    AMBER),
+        ("STATUS",      "▲ ONLINE" if alive else "▼ OFFLINE" if alive is False else "◈ INIT",
+                         GREEN if alive else RED if alive is False else DIM),
+        ("FIRST SEEN",  s.get("first_seen", "---"),  WHITE),
+        ("LATENCY",     f"{s.get('latency') or '---'} ms",     CYAN),
+        ("AVG LATENCY", f"{s.get('avg_latency') or '---'} ms", CYAN),
+        ("DOWNTIME",    f"{s.get('downtime', 0)}s",  RED),
+        ("UPTIME",      f"{uptime}%",                GREEN),
+        ("MAC",         d_info.get("mac","---"),     WHITE),
+        ("SW PORT",     d_info.get("port","---"),    AMBER),
     ]
 
     for label, val, col in stats:
         row = tk.Frame(left, bg=BG)
         row.pack(fill="x", pady=1)
         tk.Label(row, text=f"{label:<14}", bg=BG, fg=DIM,
-            font=("Courier New", 8)).pack(side="left")
+            font=best_font(8)).pack(side="left")
         tk.Label(row, text=val, bg=BG, fg=col,
-            font=("Courier New", 8, "bold")).pack(side="left")
+            font=best_font(8, True)).pack(side="left")
 
     # Notes
     tk.Label(left, text="NOTES:", bg=BG, fg=DIM,
-        font=("Courier New", 8), pady=(12,0)).pack(anchor="w", pady=(12,2))
+        font=best_font(8)).pack(anchor="w", pady=(12,2))
     notes_box = tk.Text(left, height=4, bg=BG3, fg=WHITE,
-        insertbackground=CYAN, font=("Courier New", 9),
+        insertbackground=CYAN, font=best_font(9),
         relief="flat", bd=0)
     notes_box.pack(fill="x")
     notes_box.insert("1.0", device_notes.get(ip, ""))
 
-    def save_notes_popup(event=None):
+    def save_notes(event=None):
         device_notes[ip] = notes_box.get("1.0", "end-1c")
         for d in devices:
             if d["ip"] == ip:
                 d["notes"] = device_notes[ip]
 
-    notes_box.bind("<KeyRelease>", save_notes_popup)
+    notes_box.bind("<KeyRelease>", save_notes)
 
-    # ── Right: nmap ───────────────────────────────────────────────────────────
+    # nmap panel
     tk.Label(right, text="NMAP SCAN",
-        bg=BG, fg=CYAN, font=("Courier New", 8, "bold")).pack(anchor="w")
+        bg=BG, fg=CYAN, font=best_font(8, True)).pack(anchor="w")
 
-    nmap_frame = tk.Frame(right, bg=BG3,
+    nmap_outer = tk.Frame(right, bg=BG3,
         highlightthickness=1, highlightbackground=MAGENTA_DIM)
-    nmap_frame.pack(fill="both", expand=True, pady=(4,0))
+    nmap_outer.pack(fill="both", expand=True, pady=(4,0))
 
-    nmap_status = tk.Label(nmap_frame,
-        text="◈ SCANNING PORTS...  THIS MAY TAKE 30-60 SECONDS",
-        bg=BG3, fg=AMBER, font=("Courier New", 8))
-    nmap_status.pack(pady=20)
+    nmap_status_var = tk.StringVar(value="◈ SCANNING PORTS...")
+    nmap_status_lbl = tk.Label(nmap_outer, textvariable=nmap_status_var,
+        bg=BG3, fg=AMBER, font=best_font(8))
+    nmap_status_lbl.pack(pady=8, padx=8, anchor="w")
+
+    nmap_dot_var = tk.StringVar(value="")
+    nmap_dot_lbl = tk.Label(nmap_outer, textvariable=nmap_dot_var,
+        bg=BG3, fg=MAGENTA, font=best_font(10))
+    nmap_dot_lbl.pack(padx=8, anchor="w")
+
+    nmap_scanning = {"active": True}
+
+    def animate_nmap_dots():
+        if not nmap_scanning["active"]:
+            nmap_dot_var.set("")
+            return
+        if not popup.winfo_exists():
+            return
+        current = nmap_dot_var.get()
+        nmap_dot_var.set("█" * ((len(current) % 8) + 1))
+        popup.after(200, animate_nmap_dots)
+
+    popup.after(200, animate_nmap_dots)
 
     os_var = tk.StringVar(value="")
-    tk.Label(nmap_frame, textvariable=os_var,
-        bg=BG3, fg=MAGENTA, font=("Courier New", 8, "bold"),
-        wraplength=280, justify="left").pack(padx=8, anchor="w")
+    tk.Label(nmap_outer, textvariable=os_var,
+        bg=BG3, fg=MAGENTA, font=best_font(8, True),
+        wraplength=300, justify="left").pack(padx=8, anchor="w")
 
-    port_list = tk.Frame(nmap_frame, bg=BG3)
-    port_list.pack(fill="both", expand=True, padx=8, pady=4)
+    port_frame = tk.Frame(nmap_outer, bg=BG3)
+    port_frame.pack(fill="both", expand=True, padx=8, pady=4)
 
     def run_nmap_thread():
         result = run_nmap(ip)
-        root.after(0, lambda: populate_nmap(result))
+        if popup.winfo_exists():
+            root.after(0, lambda: populate_nmap(result))
 
     def populate_nmap(result):
-        nmap_status.destroy()
+        nmap_scanning["active"] = False
+        nmap_status_var.set("◈ SCAN COMPLETE")
+        nmap_status_lbl.config(fg=GREEN)
         os_var.set(f"OS: {result['os_guess']}")
 
         if not result["ports"]:
-            tk.Label(port_list, text="NO OPEN PORTS FOUND",
-                bg=BG3, fg=DIM, font=("Courier New", 8)).pack(pady=8)
+            tk.Label(port_frame, text="NO OPEN PORTS FOUND",
+                bg=BG3, fg=DIM, font=best_font(8)).pack(pady=8)
             return
 
-        # Header
-        hrow = tk.Frame(port_list, bg=BG3)
+        # Column headers
+        hrow = tk.Frame(port_frame, bg=BG3)
         hrow.pack(fill="x")
-        for txt, w in [("PORT", 60), ("PROTO", 50), ("SERVICE", 180)]:
-            tk.Label(hrow, text=txt, width=w//7, bg=BG3, fg=CYAN,
-                font=("Courier New", 8, "bold"), anchor="w").pack(side="left")
+        for txt, w in [("PORT",7), ("PROTO",6), ("SERVICE",22)]:
+            tk.Label(hrow, text=txt, width=w, bg=BG3, fg=CYAN,
+                font=best_font(8, True), anchor="w").pack(side="left")
 
-        tk.Frame(port_list, bg=MAGENTA_DIM, height=1).pack(fill="x", pady=2)
+        tk.Frame(port_frame, bg=MAGENTA_DIM, height=1).pack(fill="x", pady=2)
 
-        # Scrollable port list
-        canvas_ports = tk.Canvas(port_list, bg=BG3, highlightthickness=0)
-        scroll_ports = ttk.Scrollbar(port_list, orient="vertical",
-            command=canvas_ports.yview)
-        ports_inner  = tk.Frame(canvas_ports, bg=BG3)
-
-        ports_inner.bind("<Configure>",
-            lambda e: canvas_ports.configure(
-                scrollregion=canvas_ports.bbox("all")))
-
-        canvas_ports.create_window((0,0), window=ports_inner, anchor="nw")
-        canvas_ports.configure(yscrollcommand=scroll_ports.set)
-        canvas_ports.pack(side="left", fill="both", expand=True)
-        scroll_ports.pack(side="right", fill="y")
+        # Scrollable list
+        c = tk.Canvas(port_frame, bg=BG3, highlightthickness=0)
+        sb = ttk.Scrollbar(port_frame, orient="vertical", command=c.yview)
+        inner = tk.Frame(c, bg=BG3)
+        inner.bind("<Configure>",
+            lambda e: c.configure(scrollregion=c.bbox("all")))
+        c.create_window((0,0), window=inner, anchor="nw")
+        c.configure(yscrollcommand=sb.set)
+        c.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
 
         for p in result["ports"]:
-            prow = tk.Frame(ports_inner, bg=BG3)
-            prow.pack(fill="x", pady=1)
-            tk.Label(prow, text=p["port"], width=6, bg=BG3, fg=GREEN,
-                font=("Courier New", 8), anchor="w").pack(side="left")
-            tk.Label(prow, text=p["protocol"], width=5, bg=BG3, fg=DIM,
-                font=("Courier New", 8), anchor="w").pack(side="left")
-            tk.Label(prow, text=p["service"], bg=BG3, fg=WHITE,
-                font=("Courier New", 8), anchor="w").pack(side="left")
+            pr = tk.Frame(inner, bg=BG3)
+            pr.pack(fill="x", pady=1)
+            tk.Label(pr, text=p["port"],     width=7,  bg=BG3, fg=GREEN,
+                font=best_font(8), anchor="w").pack(side="left")
+            tk.Label(pr, text=p["protocol"], width=6,  bg=BG3, fg=DIM,
+                font=best_font(8), anchor="w").pack(side="left")
+            tk.Label(pr, text=p["service"],  width=22, bg=BG3, fg=WHITE,
+                font=best_font(8), anchor="w").pack(side="left")
 
     threading.Thread(target=run_nmap_thread, daemon=True).start()
 
-    # Refresh sparkline every second while popup is open
-    def refresh_popup_spark():
-        if not popup.winfo_exists():
-            return
-        with history_lock:
-            s2 = list(latency_history.get(ip, []))
-        draw_sparkline(spark, s2, 320, 140, mini=False)
-        popup.after(1000, refresh_popup_spark)
-
-    popup.after(1000, refresh_popup_spark)
-
 # ── Click handlers ─────────────────────────────────────────────────────────────
+last_selected = {"ip": None}
+
 def on_single_click(event):
     item = tree.identify_row(event.y)
-    if not item or item == inline_iid:
+    if not item:
         return
-    expand_inline(item)
+    update_info_bar(item)
+    last_selected["ip"] = item
 
 def on_double_click(event):
     item = tree.identify_row(event.y)
     col  = tree.identify_column(event.x)
-    if not item or item == inline_iid:
+    if not item:
         return
 
-    # Double click on SW PORT column = edit port
     if col == "#6":
         current_val = tree.item(item)["values"][5]
         new_val = simpledialog.askstring(
@@ -557,7 +569,6 @@ def on_double_click(event):
                     d["port"] = new_val
         return
 
-    # Double click anywhere else = full detail popup
     open_detail_popup(item)
 
 tree.bind("<Button-1>",  on_single_click)
@@ -577,10 +588,10 @@ def update_table():
             tag, label = "unknown", "◈ INIT"
             pending += 1
         elif alive:
-            tag, label = "green", "● ONLINE"
+            tag, label = "green", "▲ ONLINE"
             online += 1
         else:
-            tag, label = "red", "● OFFLINE"
+            tag, label = "red", "▼ OFFLINE"
             offline += 1
 
         existing = list(tree.item(ip)["values"])
@@ -592,8 +603,8 @@ def update_table():
             s.get("downtime", 0)
         ), tags=(tag,))
 
-    online_var.set(f"● ONLINE:  {online}")
-    offline_var.set(f"● OFFLINE:  {offline}")
+    online_var.set(f"▲ ONLINE:  {online}")
+    offline_var.set(f"▼ OFFLINE:  {offline}")
     unknown_var.set(f"◈ PENDING:  {pending}")
     root.after(1000, update_table)
 
@@ -604,8 +615,8 @@ bottom.pack(fill="x", side="bottom")
 bottom.pack_propagate(False)
 
 status_bar = tk.Label(bottom,
-    text="◈ CLICK ROW = EXPAND  //  DOUBLE-CLICK = DETAIL POPUP  //  DOUBLE-CLICK SW PORT = EDIT",
-    bg=BG2, fg=DIM, font=("Courier New", 8), anchor="w")
+    text="◈ MONITORING ACTIVE",
+    bg=BG2, fg=DIM, font=best_font(8), anchor="w")
 status_bar.pack(side="left", padx=16)
 
 def on_close():
@@ -617,7 +628,7 @@ root.protocol("WM_DELETE_WINDOW", on_close)
 
 tk.Button(bottom, text="⏹  END SESSION + EXPORT",
     command=on_close,
-    bg=BG3, fg=MAGENTA, font=("Courier New", 9, "bold"),
+    bg=BG3, fg=MAGENTA, font=best_font(9, True),
     relief="flat", cursor="hand2",
     activebackground=MAGENTA, activeforeground=BG, bd=0
 ).pack(side="right", padx=16, pady=8, ipadx=12)
@@ -625,4 +636,5 @@ tk.Button(bottom, text="⏹  END SESSION + EXPORT",
 # ── Launch ─────────────────────────────────────────────────────────────────────
 threading.Thread(target=start_monitor, args=(devices,), daemon=True).start()
 root.after(1000, update_table)
+root.after(1000, refresh_info_bar)
 root.mainloop()
