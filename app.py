@@ -648,8 +648,118 @@ def build_tab(sn):
 
         open_detail_popup(item)
 
-    tree.bind("<Button-1>", on_single_click)
-    tree.bind("<Double-1>", on_double_click)
+    def on_right_click(event, _sn=sn):
+        _sd  = subnet_data[_sn]
+        item = _sd["tree"].identify_row(event.y)
+        if not item:
+            return
+
+        # Select the row on right click
+        _sd["tree"].selection_set(item)
+        update_info_bar(_sn, item)
+
+        d_info = next((d for d in _sd["devices"] if d["ip"] == item), {})
+        ip     = item
+        mac    = d_info.get("mac", "")
+        alias  = d_info.get("alias", "") or d_info.get("hostname", ip)
+
+        with status_lock:
+            s     = dict(status.get(ip, {}))
+        alive = s.get("alive")
+
+        # Build context menu
+        menu = tk.Menu(root, tearoff=0,
+            bg=BG2, fg=WHITE, activebackground=MAGENTA_DIM,
+            activeforeground=WHITE, font=best_font(9),
+            bd=0, relief="flat")
+
+        # Header — device identifier
+        menu.add_command(label=f"  {alias}  ({ip})",
+            state="disabled", font=best_font(8))
+        menu.add_separator()
+
+        # Copy actions
+        def copy_to_clipboard(text):
+            root.clipboard_clear()
+            root.clipboard_append(text)
+            root.update()
+
+        menu.add_command(
+            label="📋  Copy IP Address",
+            command=lambda: copy_to_clipboard(ip))
+        menu.add_command(
+            label="📋  Copy MAC Address",
+            command=lambda: copy_to_clipboard(mac))
+
+        menu.add_separator()
+
+        # Edit actions
+        def set_alias_ctx():
+            prompt    = f"Set friendly name for {ip}"
+            new_alias = simpledialog.askstring(
+                "Device Alias",
+                prompt + "\n(leave blank to use hostname)",
+                initialvalue=alias, parent=root)
+            if new_alias is not None:
+                for d in _sd["devices"]:
+                    if d["ip"] == ip:
+                        d["alias"] = new_alias.strip()
+                ex    = list(_sd["tree"].item(ip)["values"])
+                ex[3] = new_alias.strip() if new_alias.strip() else d_info.get("hostname","")
+                _sd["tree"].item(ip, values=ex)
+
+        def set_port_ctx():
+            cur     = _sd["tree"].item(ip)["values"][5]
+            new_val = simpledialog.askstring(
+                "Switch Port", f"Enter switch port for {ip}:",
+                initialvalue=cur, parent=root)
+            if new_val is not None:
+                ex    = list(_sd["tree"].item(ip)["values"])
+                ex[5] = new_val
+                _sd["tree"].item(ip, values=ex)
+                for d in _sd["devices"]:
+                    if d["ip"] == ip:
+                        d["port"] = new_val
+
+        menu.add_command(label="✎  Set Alias",      command=set_alias_ctx)
+        menu.add_command(label="✎  Set Switch Port", command=set_port_ctx)
+
+        menu.add_separator()
+
+        # Wake on LAN — show status in menu label
+        def wol_ctx():
+            broadcast = get_broadcast(ip)
+            success   = send_magic_packet(mac, broadcast)
+            # Flash status in info bar
+            if success:
+                status_bar.config(
+                    text=f"◈ WOL MAGIC PACKET SENT → {ip}", fg=GREEN)
+            else:
+                status_bar.config(
+                    text=f"⚠ WOL FAILED → {ip}", fg=RED)
+
+        wol_label = "⚡  Wake on LAN"
+        if alive:
+            wol_label = "⚡  Wake on LAN  (device is online)"
+        menu.add_command(label=wol_label, command=wol_ctx)
+
+        menu.add_separator()
+
+        # Full detail popup
+        menu.add_command(
+            label="🔍  Full Detail + Port Scan",
+            command=lambda: open_detail_popup(ip))
+
+        # Show menu at cursor — unpost on any click outside
+        menu.bind("<FocusOut>", lambda e: menu.unpost())
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    tree.bind("<Button-1>",   on_single_click)
+    tree.bind("<Double-1>",   on_double_click)
+    tree.bind("<Button-3>",   on_right_click)
 
 # Build all tabs
 for sn in subnets:
@@ -1138,14 +1248,124 @@ def on_close():
     status_bar.config(text=f"◈ EXPORTED → {path}", fg=GREEN)
     root.after(1500, root.destroy)
 
-root.protocol("WM_DELETE_WINDOW", on_close)
+def on_window_close():
+    # Ask user what they want when clicking X
+    confirm = tk.Toplevel(root)
+    confirm.title("Exit NetPyWiz")
+    confirm.configure(bg=BG)
+    confirm.geometry("380x200")
+    confirm.resizable(False, False)
+    confirm.grab_set()
+    confirm.update_idletasks()
+    x = (confirm.winfo_screenwidth() // 2) - 190
+    y = (confirm.winfo_screenheight() // 2) - 100
+    confirm.geometry(f"+{x}+{y}")
+
+    tk.Label(confirm, text="EXIT NETPYWIZ",
+        bg=BG, fg=MAGENTA, font=best_font(11, True)).pack(pady=(20,6))
+    tk.Label(confirm, text="What would you like to do?",
+        bg=BG, fg=DIM, font=best_font(8)).pack()
+    tk.Frame(confirm, bg=MAGENTA, height=1).pack(fill="x", padx=30, pady=10)
+
+    btn_frame = tk.Frame(confirm, bg=BG)
+    btn_frame.pack(pady=4)
+
+    def do_save():
+        confirm.grab_release()
+        confirm.destroy()
+        on_close()
+
+    def do_exit():
+        confirm.grab_release()
+        confirm.destroy()
+        if tray_icon["instance"]:
+            tray_icon["instance"].stop()
+        root.destroy()
+
+    tk.Button(btn_frame, text="⏹  SAVE + EXIT",
+        command=do_save,
+        bg=MAGENTA_DIM, fg=BG, font=best_font(9, True),
+        relief="flat", cursor="hand2",
+        activebackground=MAGENTA, activeforeground=BG, bd=0
+    ).pack(side="left", padx=6, ipadx=10, ipady=5)
+
+    tk.Button(btn_frame, text="✕  EXIT WITHOUT SAVING",
+        command=do_exit,
+        bg=BG3, fg=RED, font=best_font(9),
+        relief="flat", cursor="hand2",
+        activebackground=RED, activeforeground=BG, bd=0
+    ).pack(side="left", padx=6, ipadx=10, ipady=5)
+
+    tk.Button(btn_frame, text="← CANCEL",
+        command=lambda: (confirm.grab_release(), confirm.destroy()),
+        bg=BG3, fg=DIM, font=best_font(9),
+        relief="flat", cursor="hand2",
+        activebackground=DIM, activeforeground=BG, bd=0
+    ).pack(side="left", padx=6, ipadx=10, ipady=5)
+
+    confirm.protocol("WM_DELETE_WINDOW",
+        lambda: (confirm.grab_release(), confirm.destroy()))
+
+root.protocol("WM_DELETE_WINDOW", on_window_close)
 
 tk.Button(bottom, text="⏹  END SESSION + EXPORT",
     command=on_close,
     bg=BG3, fg=MAGENTA, font=best_font(9, True),
     relief="flat", cursor="hand2",
     activebackground=MAGENTA, activeforeground=BG, bd=0
-).pack(side="right", padx=16, pady=8, ipadx=12)
+).pack(side="right", padx=4, pady=8, ipadx=12)
+
+def exit_no_save():
+    confirm = tk.Toplevel(root)
+    confirm.title("Exit Without Saving")
+    confirm.configure(bg=BG)
+    confirm.geometry("380x180")
+    confirm.resizable(False, False)
+    confirm.grab_set()
+    confirm.update_idletasks()
+    x = (confirm.winfo_screenwidth() // 2) - 190
+    y = (confirm.winfo_screenheight() // 2) - 90
+    confirm.geometry(f"+{x}+{y}")
+
+    tk.Label(confirm, text="EXIT WITHOUT SAVING?",
+        bg=BG, fg=MAGENTA, font=best_font(11, True)).pack(pady=(24,8))
+    tk.Label(confirm,
+        text="Session data and any changes will be lost.",
+        bg=BG, fg=DIM, font=best_font(8)).pack()
+
+    tk.Frame(confirm, bg=MAGENTA, height=1).pack(fill="x", padx=30, pady=12)
+
+    btn_frame = tk.Frame(confirm, bg=BG)
+    btn_frame.pack()
+
+    def confirm_exit():
+        if tray_icon["instance"]:
+            tray_icon["instance"].stop()
+        root.destroy()
+
+    tk.Button(btn_frame, text="✕  EXIT WITHOUT SAVING",
+        command=confirm_exit,
+        bg=BG3, fg=RED, font=best_font(9, True),
+        relief="flat", cursor="hand2",
+        activebackground=RED, activeforeground=BG, bd=0
+    ).pack(side="left", padx=8, ipadx=10, ipady=5)
+
+    tk.Button(btn_frame, text="← GO BACK",
+        command=lambda: (confirm.grab_release(), confirm.destroy()),
+        bg=BG3, fg=DIM, font=best_font(9),
+        relief="flat", cursor="hand2",
+        activebackground=DIM, activeforeground=BG, bd=0
+    ).pack(side="left", padx=8, ipadx=10, ipady=5)
+
+    confirm.protocol("WM_DELETE_WINDOW",
+        lambda: (confirm.grab_release(), confirm.destroy()))
+
+tk.Button(bottom, text="✕  EXIT",
+    command=exit_no_save,
+    bg=BG3, fg=DIM, font=best_font(9),
+    relief="flat", cursor="hand2",
+    activebackground=DIM, activeforeground=BG, bd=0
+).pack(side="right", padx=4, pady=8, ipadx=12)
 
 # ── Launch ────────────────────────────────────────────────────────────────────
 threading.Thread(target=start_monitor, args=(all_devices,), daemon=True).start()

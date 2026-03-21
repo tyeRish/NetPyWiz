@@ -7,6 +7,7 @@ DEFAULTS = {
     "last_subnet":   "192.168.1.0/24",
     "window_size":   "1280x760",
     "last_session":  "",
+    "nvd_api_key":   "",
 }
 
 def load() -> dict:

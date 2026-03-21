@@ -92,7 +92,7 @@ def export_to_desktop(devices: list[dict], append_to: str = None,
         writer = csv.writer(f)
         if write_header:
             writer.writerow([
-                "Session", "IP", "MAC", "Hostname", "Vendor",
+                "Session", "IP", "MAC", "Hostname", "Alias", "Vendor",
                 "Switch Port", "Status", "Last Latency (ms)",
                 "Avg Latency (ms)", "Total Downtime (s)",
                 "Vulnerabilities", "Notes"
@@ -104,6 +104,7 @@ def export_to_desktop(devices: list[dict], append_to: str = None,
             has_vuln = "YES" if ip in vuln_devices else "NO"
             writer.writerow([
                 timestamp, ip, d["mac"], d["hostname"], d["vendor"],
+                d.get("alias", ""),
                 d.get("port",  ""),
                 "ONLINE" if alive else "OFFLINE" if alive is False else "UNKNOWN",
                 s.get("latency")     or "",

@@ -47,13 +47,36 @@ echo "► Creating desktop shortcut..."
 cat > /usr/share/applications/netpywiz.desktop << 'DESKTOP'
 [Desktop Entry]
 Name=NetPyWiz
-Comment=Network Monitor
-Exec=sudo /usr/local/bin/NetPyWiz
+GenericName=Network Monitor
+Comment=Network monitoring and security reconnaissance tool
+Exec=pkexec /usr/local/bin/NetPyWiz
 Icon=network-wired
 Terminal=false
 Type=Application
-Categories=Network;
+Categories=Network;Security;
+StartupNotify=true
 DESKTOP
+
+echo "► Installing pkexec policy..."
+cat > /usr/share/polkit-1/actions/com.netpywiz.policy << 'POLICY'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <action id="com.netpywiz.run">
+    <description>Run NetPyWiz Network Monitor</description>
+    <message>NetPyWiz requires administrator privileges for network scanning</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/NetPyWiz</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>
+POLICY
 
 echo ""
 echo "────────────────────────────"

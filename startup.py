@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import filedialog
+from subnet_discovery import run_discovery_dialog
+from subnet_discovery import run_discovery_dialog
 import threading
 from scanner import scan_subnet
 from exporter import load_session_csv
@@ -13,6 +15,7 @@ MAGENTA_DIM = "#cc00cc"
 RED         = "#ff2255"
 AMBER       = "#ffaa00"
 DIM         = "#444466"
+YELLOW      = "#ffe94d"
 
 def best_font(size=10, bold=False):
     weight = "bold" if bold else "normal"
@@ -27,23 +30,19 @@ def best_font(size=10, bold=False):
     return ("Courier New", size, weight)
 
 
-def ask_subnets(root, error_msg="", default_subnet="192.168.1.0/24"):
-    """
-    Returns a list of subnet strings to scan, or empty list if cancelled.
-    Allows user to queue multiple subnets before scanning.
-    """
-    result    = {"subnets": [], "load_file": None, "cancelled": False}
-    queued    = []
+def ask_subnets(root, error_msg="", default_subnet="192.168.1.0/24", nvd_api_key=""):
+    result = {"subnets": [], "load_file": None, "cancelled": False, "api_key": ""}
+    queued = []
 
     dialog = tk.Toplevel(root)
     dialog.title("NetPyWiz")
     dialog.configure(bg=BG)
-    dialog.geometry("520x420")
+    dialog.geometry("520x660")
     dialog.resizable(False, False)
     dialog.grab_set()
     dialog.update_idletasks()
     x = (dialog.winfo_screenwidth() // 2) - 260
-    y = (dialog.winfo_screenheight() // 2) - 210
+    y = (dialog.winfo_screenheight() // 2) - 290
     dialog.geometry(f"+{x}+{y}")
 
     tk.Label(dialog, text="▓▓ NETPYWIZ // NETWORK MONITOR ▓▓",
@@ -71,9 +70,7 @@ def ask_subnets(root, error_msg="", default_subnet="192.168.1.0/24"):
     # Queue display
     queue_frame = tk.Frame(dialog, bg=BG)
     queue_frame.pack(fill="x", padx=50, pady=4)
-
-    queue_label = tk.Label(queue_frame,
-        text="", bg=BG, fg=AMBER, font=best_font(8))
+    queue_label = tk.Label(queue_frame, text="", bg=BG, fg=AMBER, font=best_font(8))
     queue_label.pack(anchor="w")
 
     def refresh_queue():
@@ -97,13 +94,14 @@ def ask_subnets(root, error_msg="", default_subnet="192.168.1.0/24"):
             queued.append(val)
         if queued:
             result["subnets"] = list(queued)
+            result["api_key"] = api_var.get().strip()
             dialog.grab_release()
             dialog.destroy()
 
     entry.bind("<Return>",   start_scan)
     entry.bind("<KP_Enter>", start_scan)
 
-    # Buttons
+    # Scan buttons
     btn_frame = tk.Frame(dialog, bg=BG)
     btn_frame.pack(pady=6)
 
@@ -121,7 +119,28 @@ def ask_subnets(root, error_msg="", default_subnet="192.168.1.0/24"):
         activebackground=MAGENTA, activeforeground=BG, bd=0
     ).pack(side="left", padx=6, ipadx=10, ipady=4)
 
-    tk.Frame(dialog, bg=DIM, height=1).pack(fill="x", padx=30, pady=8)
+    # Load session
+    # Auto-discover button
+    tk.Frame(dialog, bg=DIM, height=1).pack(fill="x", padx=30, pady=(6,0))
+    tk.Label(dialog, text="— OR AUTO-DISCOVER SUBNETS —",
+        bg=BG, fg=DIM, font=best_font(7)).pack(pady=(6,0))
+
+    def auto_discover():
+        discovered = run_discovery_dialog(root)
+        if discovered:
+            result["subnets"] = discovered
+            result["api_key"] = api_var.get().strip()
+            dialog.grab_release()
+            dialog.destroy()
+
+    tk.Button(dialog, text="🔍  AUTO-DISCOVER SUBNETS",
+        command=auto_discover,
+        bg=BG3, fg=YELLOW, font=best_font(9),
+        relief="flat", cursor="hand2",
+        activebackground=YELLOW, activeforeground=BG, bd=0
+    ).pack(pady=6, ipadx=16, ipady=4)
+
+    tk.Frame(dialog, bg=DIM, height=1).pack(fill="x", padx=30, pady=(6,0))
     tk.Label(dialog, text="— OR LOAD A PREVIOUS SESSION —",
         bg=BG, fg=DIM, font=best_font(7)).pack()
 
@@ -133,6 +152,7 @@ def ask_subnets(root, error_msg="", default_subnet="192.168.1.0/24"):
         )
         if path:
             result["load_file"] = path
+            result["api_key"]   = api_var.get().strip()
             dialog.grab_release()
             dialog.destroy()
 
@@ -141,6 +161,25 @@ def ask_subnets(root, error_msg="", default_subnet="192.168.1.0/24"):
         relief="flat", cursor="hand2",
         activebackground=CYAN, activeforeground=BG, bd=0
     ).pack(pady=6, ipadx=16, ipady=4)
+
+    # NVD API Key
+    tk.Frame(dialog, bg=DIM, height=1).pack(fill="x", padx=30, pady=(8,0))
+    api_frame = tk.Frame(dialog, bg=BG)
+    api_frame.pack(fill="x", padx=50, pady=6)
+
+    tk.Label(api_frame, text="NVD API KEY  (optional — faster CVE lookups)",
+        bg=BG, fg=DIM, font=best_font(7)).pack(anchor="w")
+
+    api_var = tk.StringVar(value=nvd_api_key)
+    api_entry = tk.Entry(api_frame, textvariable=api_var,
+        bg=BG3, fg=CYAN, insertbackground=CYAN,
+        font=best_font(8), relief="flat", bd=0, show="*")
+    api_entry.pack(fill="x", ipady=5)
+    tk.Frame(api_frame, bg=DIM, height=1).pack(fill="x")
+
+    tk.Label(api_frame,
+        text="Register free at nvd.nist.gov/developers/request-an-api-key",
+        bg=BG, fg=DIM, font=best_font(6)).pack(anchor="w", pady=(2,0))
 
     dialog.protocol("WM_DELETE_WINDOW", lambda: (
         result.update({"cancelled": True}),
@@ -153,7 +192,6 @@ def ask_subnets(root, error_msg="", default_subnet="192.168.1.0/24"):
 
 
 def run_splash_scan(root, subnet_str):
-    """Runs ARP scan with animated splash. Returns device list."""
     found     = []
     scan_done = threading.Event()
     stop_anim = threading.Event()
@@ -181,12 +219,12 @@ def run_splash_scan(root, subnet_str):
         font=best_font(12)).pack()
 
     def run_scan():
-        result = scan_subnet(subnet_str)
-        for d in result:
+        r = scan_subnet(subnet_str)
+        for d in r:
             d["port"]   = d.get("port",  "")
             d["notes"]  = d.get("notes", "")
             d["subnet"] = subnet_str
-        found.extend(result)
+        found.extend(r)
         stop_anim.set()
         scan_done.set()
 
