@@ -48,6 +48,7 @@ from wol import send_magic_packet, get_broadcast
 from config import load as load_config, save as save_config
 from cve_lookup import lookup_cves, severity_color
 from report_generator import generate_device_report, save_device_report
+from version import __version__
 
 BG          = "#0a0a0f"
 BG2         = "#0f0f1a"
@@ -214,6 +215,8 @@ tk.Label(header, text="NETPYWIZ",
     bg=BG2, fg=MAGENTA, font=best_font(18, True)).pack(side="left", pady=10)
 tk.Label(header, text="// NETWORK MONITOR",
     bg=BG2, fg=CYAN, font=best_font(12)).pack(side="left", padx=8, pady=10)
+tk.Label(header, text=f"v{__version__}",
+    bg=BG2, fg=DIM, font=best_font(8)).pack(side="left", pady=10)
 
 if session_file["path"]:
     tk.Label(header, text="◈ SESSION LOADED",
