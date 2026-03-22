@@ -15,12 +15,11 @@ def get_real_user():
 
 def get_desktop_path():
     if platform.system() == "Windows":
+        # Windows Desktop path
         desktop = os.path.join(os.environ.get("USERPROFILE", "C:\\Users\\user"), "Desktop")
     else:
         real_user = get_real_user()
         desktop   = f"/home/{real_user}/Desktop"
-    print(f"Desktop path: {desktop}")
-    print(f"Desktop exists: {os.path.exists(desktop)}")
     os.makedirs(desktop, exist_ok=True)
     return desktop
 
