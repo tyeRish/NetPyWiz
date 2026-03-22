@@ -25,6 +25,16 @@ def check_admin():
         pass
 
 check_admin()
+
+# Redirect stderr to log file unless --debug is passed.
+# This silences harmless Tkinter Variable.__del__ threading noise in production.
+import sys as _sys
+_debug_mode = "--debug" in _sys.argv
+if not _debug_mode:
+    _log_path = os.path.join(os.path.expanduser("~"), ".netpywiz", "debug.log")
+    os.makedirs(os.path.dirname(_log_path), exist_ok=True)
+    _sys.stderr = open(_log_path, "w", buffering=1)
+
 from tkinter import ttk, simpledialog
 import threading
 import time
@@ -173,6 +183,9 @@ for sn in subnets:
         "info_vars":     {},
         "status_bar":    None,
         "rescan_btn":    None,
+        "sort_state":    [],
+        "apply_sort":    None,
+        "apply_filter":  None,
     }
 
 # ── Main Window ───────────────────────────────────────────────────────────────
@@ -267,15 +280,16 @@ notebook = ttk.Notebook(root)
 notebook.pack(fill="both", expand=True)
 
 col_defs = {
-    "status":      ("STATUS",      90),
-    "ip":          ("IP ADDRESS", 130),
-    "mac":         ("MAC ADDRESS",155),
-    "hostname":    ("HOSTNAME",   200),
-    "vendor":      ("VENDOR",     160),
-    "port":        ("SW PORT",    100),
-    "latency":     ("LAT ms",      90),
-    "avg_latency": ("AVG ms",      90),
-    "downtime":    ("DOWN s",      80),
+    "status":       ("STATUS",       90),
+    "ip":           ("IP ADDRESS",  130),
+    "mac":          ("MAC ADDRESS", 155),
+    "hostname":     ("HOSTNAME",    200),
+    "vendor":       ("VENDOR",      160),
+    "port":         ("SW PORT",     100),
+    "patch_panel":  ("PATCH PANEL", 100),
+    "latency":      ("LAT ms",       90),
+    "avg_latency":  ("AVG ms",       90),
+    "downtime":     ("DOWN s",       80),
 }
 columns = list(col_defs.keys())
 
@@ -336,7 +350,7 @@ def build_tab(sn):
     sd["tree"] = tree
 
     # ── Column sorting ───────────────────────────────────────────────────────
-    sort_state = []  # list of (col, reverse) — supports stacked sorts
+    # sort_state lives in sd so update_all_tables can trigger re-sort live
 
     def sort_by(col, tree=tree, shift=False):
         """
@@ -344,30 +358,25 @@ def build_tab(sn):
         Shift+click = add col as secondary sort
         Clicking same col again = reverse direction
         """
-        nonlocal sort_state
-
-        # Check if this col already in sort
-        existing = [(c, r) for c, r in sort_state if c == col]
+        existing = [(c, r) for c, r in sd["sort_state"] if c == col]
 
         if shift:
             if existing:
-                # Reverse existing
-                sort_state = [(c, not r) if c == col else (c, r)
-                              for c, r in sort_state]
+                sd["sort_state"] = [(c, not r) if c == col else (c, r)
+                                    for c, r in sd["sort_state"]]
             else:
-                sort_state.append((col, False))
+                sd["sort_state"].append((col, False))
         else:
-            if existing and len(sort_state) == 1:
-                # Same col, single sort — reverse
-                sort_state = [(col, not existing[0][1])]
+            if existing and len(sd["sort_state"]) == 1:
+                sd["sort_state"] = [(col, not existing[0][1])]
             else:
-                sort_state = [(col, False)]
+                sd["sort_state"] = [(col, False)]
 
         apply_sort(tree)
         update_sort_headers(tree)
 
     def apply_sort(tree):
-        """Sorts all rows in the tree by current sort_state."""
+        """Sorts all rows in the tree by current sd['sort_state']."""
         items = [(tree.item(k)["values"], k) for k in tree.get_children("")]
         if not items:
             return
@@ -382,8 +391,6 @@ def build_tab(sn):
                 except Exception:
                     return 999999
             elif col == "ip":
-                # Convert IP to tuple of ints for proper numeric sort
-                # e.g. "10.55.0.10" -> (10, 55, 0, 10)
                 try:
                     return tuple(int(p) for p in str(val).split("."))
                 except Exception:
@@ -391,8 +398,7 @@ def build_tab(sn):
             else:
                 return str(val).lower()
 
-        # Stable multi-column sort — apply in reverse order of priority
-        for col, reverse in reversed(sort_state):
+        for col, reverse in reversed(sd["sort_state"]):
             idx = col_order.index(col)
             items.sort(
                 key=lambda item, c=col, i=idx: make_sort_key(c, item[0][i]),
@@ -404,13 +410,15 @@ def build_tab(sn):
 
     def update_sort_headers(tree):
         """Update column headers to show sort arrows."""
-        sort_cols = {c: r for c, r in sort_state}
+        sort_cols = {c: r for c, r in sd["sort_state"]}
         for col, (label, width) in col_defs.items():
             if col in sort_cols:
                 arrow = " ▼" if sort_cols[col] else " ▲"
                 tree.heading(col, text=label + arrow)
             else:
                 tree.heading(col, text=label)
+
+    sd["apply_sort"] = apply_sort
 
     for col, (label, width) in col_defs.items():
         tree.heading(col, text=label,
@@ -420,7 +428,7 @@ def build_tab(sn):
                            __import__("tkinter").EventType)))
         tree.column(col, width=width,
             anchor="center" if col in
-                ("status","port","latency","avg_latency","downtime") else "w")
+                ("status","port","patch_panel","latency","avg_latency","downtime") else "w")
 
     # Bind shift+click on headers separately
     def on_header_click(event, tree=tree):
@@ -441,6 +449,7 @@ def build_tab(sn):
     tree.tag_configure("red",     background=BG3, foreground=RED)
     tree.tag_configure("unknown", background=BG3, foreground=DIM)
     tree.tag_configure("new",     background="#1a1a00", foreground=YELLOW)
+    tree.tag_configure("lost",    background=BG3, foreground="#333355")
 
     scrollbar = ttk.Scrollbar(table_frame, orient="vertical",
         command=tree.yview)
@@ -454,7 +463,7 @@ def build_tab(sn):
         tree.insert("", "end", iid=d["ip"], values=(
             "★ NEW" if is_new else "◈ INIT",
             d["ip"], d["mac"], d["hostname"], d["vendor"],
-            d.get("port",""), "", "", "0"
+            d.get("port",""), d.get("patch_panel",""), "", "", "0"
         ), tags=("new" if is_new else "unknown",))
 
     # Info bar
@@ -524,11 +533,28 @@ def build_tab(sn):
         query  = _sd["filter_var"].get().strip().lower()
         if query == "filter devices...":
             query = ""
+        with status_lock:
+            cur_status = dict(status)
         for d in _sd["devices"]:
-            ip       = d["ip"]
+            ip = d["ip"]
+            s  = cur_status.get(ip, {})
+            alive    = s.get("alive")
+            downtime = s.get("downtime", 0)
+            is_new   = d.get("new_device", False)
+            if is_new:
+                status_str = "new"
+            elif alive is None:
+                status_str = "init"
+            elif alive:
+                status_str = "online"
+            elif downtime >= 30:
+                status_str = "lost"
+            else:
+                status_str = "offline"
             haystack = " ".join([ip,
                 d.get("hostname",""), d.get("vendor",""),
-                d.get("mac",""),      d.get("port","")]).lower()
+                d.get("mac",""),      d.get("port",""),
+                d.get("patch_panel",""), status_str]).lower()
             match = (query in haystack) if query else True
             if not match and ip not in _sd["detached"]:
                 _sd["tree"].detach(ip)
@@ -538,6 +564,7 @@ def build_tab(sn):
                 _sd["detached"].discard(ip)
 
     filter_var.trace_add("write", apply_filter)
+    sd["apply_filter"] = apply_filter
 
     # Rescan logic
     rescan_running = threading.Event()
@@ -582,7 +609,7 @@ def build_tab(sn):
                             "", "end", iid=dev["ip"],
                             values=("★ NEW", dev["ip"], dev["mac"],
                                     dev["hostname"], dev["vendor"],
-                                    "", "", "", "0"),
+                                    "", "", "", "", "0"),
                             tags=("new",))
                     ))
 
@@ -644,6 +671,21 @@ def build_tab(sn):
                 for d in _sd["devices"]:
                     if d["ip"] == item:
                         d["port"] = new_val
+            return
+
+        # Col #7 = patch panel
+        if col == "#7":
+            cur = _sd["tree"].item(item)["values"][6]
+            new_val = simpledialog.askstring(
+                "Patch Panel", f"Enter patch panel port for {item}:",
+                initialvalue=cur, parent=root)
+            if new_val is not None:
+                ex    = list(_sd["tree"].item(item)["values"])
+                ex[6] = new_val
+                _sd["tree"].item(item, values=ex)
+                for d in _sd["devices"]:
+                    if d["ip"] == item:
+                        d["patch_panel"] = new_val
             return
 
         open_detail_popup(item)
@@ -721,8 +763,34 @@ def build_tab(sn):
                     if d["ip"] == ip:
                         d["port"] = new_val
 
-        menu.add_command(label="✎  Set Alias",      command=set_alias_ctx)
-        menu.add_command(label="✎  Set Switch Port", command=set_port_ctx)
+        def set_patch_panel_ctx():
+            cur     = _sd["tree"].item(ip)["values"][6]
+            new_val = simpledialog.askstring(
+                "Patch Panel", f"Enter patch panel port for {ip}:",
+                initialvalue=cur, parent=root)
+            if new_val is not None:
+                ex    = list(_sd["tree"].item(ip)["values"])
+                ex[6] = new_val
+                _sd["tree"].item(ip, values=ex)
+                for d in _sd["devices"]:
+                    if d["ip"] == ip:
+                        d["patch_panel"] = new_val
+
+        def add_note_ctx():
+            cur_note = device_notes.get(ip, "") or d_info.get("notes", "")
+            new_note = simpledialog.askstring(
+                "Device Note", f"Note for {ip}:",
+                initialvalue=cur_note, parent=root)
+            if new_note is not None:
+                device_notes[ip] = new_note
+                for d in _sd["devices"]:
+                    if d["ip"] == ip:
+                        d["notes"] = new_note
+
+        menu.add_command(label="✎  Set Alias",       command=set_alias_ctx)
+        menu.add_command(label="✎  Set Switch Port",  command=set_port_ctx)
+        menu.add_command(label="✎  Set Patch Panel",  command=set_patch_panel_ctx)
+        menu.add_command(label="✎  Add/Edit Note",    command=add_note_ctx)
 
         menu.add_separator()
 
@@ -1121,9 +1189,10 @@ def update_all_tables():
             ip     = d["ip"]
             if not tree.exists(ip):
                 continue
-            s      = current.get(ip, {})
-            is_new = d.get("new_device", False)
-            alive  = s.get("alive")
+            s        = current.get(ip, {})
+            is_new   = d.get("new_device", False)
+            alive    = s.get("alive")
+            downtime = s.get("downtime", 0)
 
             if is_new:
                 total_new += 1
@@ -1138,6 +1207,9 @@ def update_all_tables():
             elif alive:
                 tag, label = "green", "▲ ONLINE"
                 total_online += 1
+            elif downtime >= 30:
+                tag, label = "lost", "◈ LOST"
+                total_offline += 1
             else:
                 tag, label = "red", "▼ OFFLINE"
                 total_offline += 1
@@ -1145,11 +1217,23 @@ def update_all_tables():
             ex = list(tree.item(ip)["values"])
             tree.item(ip, values=(
                 label,
-                ex[1], ex[2], ex[3], ex[4], ex[5],
+                ex[1], ex[2], ex[3], ex[4], ex[5], ex[6],
                 f"{s['latency']} ms"     if s.get("latency")     else "---",
                 f"{s['avg_latency']} ms" if s.get("avg_latency") else "---",
                 s.get("downtime", 0)
             ), tags=(tag,))
+
+        # Re-apply active sort so offline/online devices reposition live
+        apply_sort_fn = sd.get("apply_sort")
+        if apply_sort_fn and sd.get("sort_state"):
+            apply_sort_fn(tree)
+
+        # Re-apply filter live (keeps status keywords like "offline" / "lost" current)
+        apply_filter_fn = sd.get("apply_filter")
+        if apply_filter_fn:
+            fq = sd["filter_var"].get().strip().lower() if sd.get("filter_var") else ""
+            if fq and fq != "filter devices...":
+                apply_filter_fn()
 
     online_var.set(f"▲ ONLINE:  {total_online}")
     offline_var.set(f"▼ OFFLINE:  {total_offline}")

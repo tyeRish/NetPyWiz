@@ -29,7 +29,9 @@ def ping_worker(ip: str):
 
         with status_lock:
             prev = status[ip]["alive"]
-            if prev is False:
+            if alive:
+                status[ip]["downtime"] = 0
+            elif prev is False:
                 status[ip]["downtime"] += 1
             if latency is not None:
                 latency_samples.append(latency)

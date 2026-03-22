@@ -93,7 +93,7 @@ def export_to_desktop(devices: list[dict], append_to: str = None,
         if write_header:
             writer.writerow([
                 "Session", "IP", "MAC", "Hostname", "Alias", "Vendor",
-                "Switch Port", "Status", "Last Latency (ms)",
+                "Switch Port", "Patch Panel", "Status", "Last Latency (ms)",
                 "Avg Latency (ms)", "Total Downtime (s)",
                 "Vulnerabilities", "Notes"
             ])
@@ -103,9 +103,9 @@ def export_to_desktop(devices: list[dict], append_to: str = None,
             alive = s.get("alive")
             has_vuln = "YES" if ip in vuln_devices else "NO"
             writer.writerow([
-                timestamp, ip, d["mac"], d["hostname"], d["vendor"],
-                d.get("alias", ""),
-                d.get("port",  ""),
+                timestamp, ip, d["mac"], d["hostname"], d.get("alias", ""), d["vendor"],
+                d.get("port",        ""),
+                d.get("patch_panel", ""),
                 "ONLINE" if alive else "OFFLINE" if alive is False else "UNKNOWN",
                 s.get("latency")     or "",
                 s.get("avg_latency") or "",
@@ -131,13 +131,15 @@ def load_session_csv(filepath: str) -> list[dict]:
                     continue
                 seen_macs.add(mac)
                 devices.append({
-                    "ip":       row.get("IP",          "").strip(),
-                    "mac":      mac,
-                    "hostname": row.get("Hostname",    "").strip(),
-                    "vendor":   row.get("Vendor",      "").strip(),
-                    "port":     row.get("Switch Port", "").strip(),
-                    "notes":    row.get("Notes",       "").strip(),
-                    "previous": True
+                    "ip":          row.get("IP",           "").strip(),
+                    "mac":         mac,
+                    "hostname":    row.get("Hostname",     "").strip(),
+                    "alias":       row.get("Alias",        "").strip(),
+                    "vendor":      row.get("Vendor",       "").strip(),
+                    "port":        row.get("Switch Port",  "").strip(),
+                    "patch_panel": row.get("Patch Panel",  "").strip(),
+                    "notes":       row.get("Notes",        "").strip(),
+                    "previous":    True
                 })
     except Exception as e:
         print(f"Failed to load session: {e}")
